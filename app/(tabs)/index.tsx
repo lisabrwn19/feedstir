@@ -1,98 +1,169 @@
 import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+import { useRouter } from 'expo-router';
+import { FlatList, Pressable, StyleSheet, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Link } from 'expo-router';
+import { useRecipes } from '@/context/recipes-context';
+import { useThemeColor } from '@/hooks/use-theme-color';
+import type { Recipe } from '@/types/recipe';
 
-export default function HomeScreen() {
+function formatMeta(recipe: Recipe) {
+  const parts: string[] = [];
+  if (recipe.servings) parts.push(`${recipe.servings} servings`);
+  const totalTime = (recipe.prepTimeMinutes ?? 0) + (recipe.cookTimeMinutes ?? 0);
+  if (totalTime > 0) parts.push(`${totalTime} min`);
+  if (recipe.rating) parts.push(`★${recipe.rating}`);
+  if (recipe.timesMade > 0) parts.push(`Made ${recipe.timesMade}×`);
+  return parts.join(' · ');
+}
+
+function RecipeCard({ recipe }: { recipe: Recipe }) {
+  const router = useRouter();
+  const borderColor = useThemeColor({}, 'icon');
+  const meta = formatMeta(recipe);
+
   return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
+    <Pressable
+      onPress={() => router.push({ pathname: '/recipe/[id]', params: { id: recipe.id } })}
+      style={[styles.card, { borderColor }]}>
+      {recipe.photoUri ? (
+        <Image source={{ uri: recipe.photoUri }} style={styles.thumbnail} />
+      ) : (
+        <View style={[styles.thumbnail, styles.thumbnailPlaceholder, { borderColor }]}>
+          <IconSymbol name="fork.knife" size={24} color={borderColor} />
+        </View>
+      )}
+      <View style={styles.cardBody}>
+        <ThemedText type="defaultSemiBold" numberOfLines={1}>
+          {recipe.title}
         </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+        {meta ? <ThemedText style={styles.cardMeta}>{meta}</ThemedText> : null}
+      </View>
+      <IconSymbol name="chevron.right" size={18} color={borderColor} />
+    </Pressable>
+  );
+}
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
+export default function RecipesScreen() {
+  const { recipes } = useRecipes();
+  const router = useRouter();
+  const accentColor = useThemeColor({}, 'accent');
+  const borderColor = useThemeColor({}, 'icon');
+
+  return (
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <ThemedView style={styles.header}>
+        <ThemedText type="title">Recipes</ThemedText>
+        <Pressable
+          onPress={() => router.push('/recipe/new')}
+          style={[styles.addButton, { backgroundColor: accentColor }]}
+          hitSlop={8}>
+          <IconSymbol name="plus" size={20} color="#fff" />
+        </Pressable>
       </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+
+      {recipes.length === 0 ? (
+        <ThemedView style={styles.emptyState}>
+          <IconSymbol name="fork.knife" size={48} color={borderColor} />
+          <ThemedText type="subtitle" style={styles.emptyTitle}>
+            No recipes yet
+          </ThemedText>
+          <ThemedText style={styles.emptyBody}>
+            Save your first recipe to see it here.
+          </ThemedText>
+          <Pressable
+            onPress={() => router.push('/recipe/new')}
+            style={[styles.emptyButton, { backgroundColor: accentColor }]}>
+            <ThemedText style={styles.emptyButtonText}>Add your first recipe</ThemedText>
+          </Pressable>
+        </ThemedView>
+      ) : (
+        <FlatList
+          data={recipes}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.list}
+          renderItem={({ item }) => <RecipeCard recipe={item} />}
+        />
+      )}
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
+  container: {
+    flex: 1,
+  },
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 12,
+    paddingBottom: 16,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  addButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
+  list: {
+    paddingHorizontal: 20,
+    paddingBottom: 24,
+    gap: 12,
+  },
+  card: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 12,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+  },
+  thumbnail: {
+    width: 56,
+    height: 56,
+    borderRadius: 8,
+  },
+  thumbnailPlaceholder: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  cardBody: {
+    flex: 1,
+    gap: 4,
+  },
+  cardMeta: {
+    fontSize: 13,
+    opacity: 0.7,
+  },
+  emptyState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    paddingHorizontal: 40,
+  },
+  emptyTitle: {
+    marginTop: 8,
+  },
+  emptyBody: {
+    textAlign: 'center',
+    opacity: 0.7,
+  },
+  emptyButton: {
+    marginTop: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 24,
+  },
+  emptyButtonText: {
+    color: '#fff',
+    fontWeight: '600',
   },
 });

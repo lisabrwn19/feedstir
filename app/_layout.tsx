@@ -3,6 +3,8 @@ import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 
+import { GroceryProvider } from '@/context/grocery-context';
+import { RecipesProvider } from '@/context/recipes-context';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export const unstable_settings = {
@@ -14,10 +16,19 @@ export default function RootLayout() {
 
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-      </Stack>
+      <RecipesProvider>
+        <GroceryProvider>
+          <Stack>
+            <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+            <Stack.Screen
+              name="recipe/new"
+              options={{ presentation: 'modal', title: 'New Recipe' }}
+            />
+            <Stack.Screen name="recipe/[id]" options={{ title: 'Recipe' }} />
+          </Stack>
+        </GroceryProvider>
+      </RecipesProvider>
       <StatusBar style="auto" />
     </ThemeProvider>
   );

@@ -16,6 +16,10 @@ export const Colors = {
     icon: '#687076',
     tabIconDefault: '#687076',
     tabIconSelected: tintColorLight,
+    // Solid button fills. Unlike `tint` (which flips to white in dark mode
+    // for icon contrast), this stays the same brand blue in both themes so
+    // filled buttons never end up white-on-white.
+    accent: '#0a7ea4',
   },
   dark: {
     text: '#ECEDEE',
@@ -24,6 +28,7 @@ export const Colors = {
     icon: '#9BA1A6',
     tabIconDefault: '#9BA1A6',
     tabIconSelected: tintColorDark,
+    accent: '#0a7ea4',
   },
 };
 

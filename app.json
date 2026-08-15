@@ -38,6 +38,12 @@
             "backgroundColor": "#000000"
           }
         }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Feedstir uses your photos to add a picture to a recipe."
+        }
       ]
     ],
     "experiments": {
