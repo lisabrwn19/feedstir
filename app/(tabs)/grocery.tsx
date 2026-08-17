@@ -1,27 +1,192 @@
 import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useGrocery } from '@/context/grocery-context';
-import { useRecipes } from '@/context/recipes-context';
+import { useRecipeDoc } from '@/context/recipes-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import { db } from '@/lib/firebase';
 import { categorizeIngredient, GROCERY_SECTIONS } from '@/utils/grocery-sections';
 
-export default function GroceryScreen() {
+function useUserEmail(uid: string | undefined) {
+  const [email, setEmail] = useState<string | undefined>();
+  useEffect(() => {
+    if (!uid) {
+      setEmail(undefined);
+      return;
+    }
+    return onSnapshot(doc(db, 'users', uid), (snapshot) => setEmail(snapshot.data()?.email));
+  }, [uid]);
+  return email;
+}
+
+function QueuedRecipeCard({ recipeId, onUnqueue }: { recipeId: string; onUnqueue: () => void }) {
   const router = useRouter();
-  const { recipes } = useRecipes();
-  const { queuedRecipeIds, toggleQueued, groceryItems, toggleGroceryItemChecked, removeGroceryItem, clearCheckedItems } =
-    useGrocery();
+  const border = useThemeColor({}, 'icon');
+  const recipe = useRecipeDoc(recipeId);
+
+  if (!recipe) return null;
+
+  return (
+    <Pressable
+      onPress={() => router.push({ pathname: '/recipe/[id]', params: { id: recipe.id } })}
+      style={[styles.queuedCard, { borderColor: border }]}>
+      {recipe.photoUri ? (
+        <Image source={{ uri: recipe.photoUri }} style={styles.queuedThumbnail} />
+      ) : (
+        <View style={[styles.queuedThumbnail, styles.queuedThumbnailPlaceholder, { borderColor: border }]}>
+          <IconSymbol name="fork.knife" size={20} color={border} />
+        </View>
+      )}
+      <ThemedText style={styles.queuedTitle} numberOfLines={2}>
+        {recipe.title}
+      </ThemedText>
+      <Pressable onPress={onUnqueue} hitSlop={8}>
+        <IconSymbol name="xmark" size={16} color={border} />
+      </Pressable>
+    </Pressable>
+  );
+}
+
+function CollaboratorRow({ uid }: { uid: string }) {
+  const border = useThemeColor({}, 'icon');
+  const email = useUserEmail(uid);
+  return <ThemedText style={{ color: border }}>{email ?? uid}</ThemedText>;
+}
+
+function SharingSection() {
+  const { isOwnList, activeListId, collaboratorIds, inviteCollaborator } = useGrocery();
+  const text = useThemeColor({}, 'text');
   const border = useThemeColor({}, 'icon');
   const accent = useThemeColor({}, 'accent');
+  const ownerEmail = useUserEmail(isOwnList ? undefined : activeListId);
 
-  const queuedRecipes = queuedRecipeIds
-    .map((recipeId) => recipes.find((r) => r.id === recipeId))
-    .filter((r): r is NonNullable<typeof r> => Boolean(r));
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviting, setInviting] = useState(false);
+
+  const handleInvite = async () => {
+    const trimmed = inviteEmail.trim();
+    if (!trimmed) return;
+    setInviting(true);
+    try {
+      await inviteCollaborator(trimmed);
+      setInviteEmail('');
+      Alert.alert('Invite sent', `${trimmed} can accept it next time they sign in.`);
+    } catch {
+      Alert.alert('Could not send invite', 'Something went wrong. Try again.');
+    } finally {
+      setInviting(false);
+    }
+  };
+
+  if (!isOwnList) {
+    return (
+      <View style={styles.section}>
+        <ThemedText type="subtitle">Sharing</ThemedText>
+        <ThemedText style={styles.emptyHint}>
+          You&apos;re collaborating on {ownerEmail ?? "someone else's"} grocery list.
+        </ThemedText>
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.section}>
+      <ThemedText type="subtitle">Sharing</ThemedText>
+      {collaboratorIds.length > 0 ? (
+        <View style={styles.collaboratorList}>
+          {collaboratorIds.map((uid) => (
+            <CollaboratorRow key={uid} uid={uid} />
+          ))}
+        </View>
+      ) : (
+        <ThemedText style={styles.emptyHint}>
+          Invite someone to collaborate on this grocery list with you.
+        </ThemedText>
+      )}
+      <View style={styles.importRow}>
+        <TextInput
+          value={inviteEmail}
+          onChangeText={setInviteEmail}
+          placeholder="Their email"
+          placeholderTextColor={border}
+          keyboardType="email-address"
+          autoCapitalize="none"
+          autoCorrect={false}
+          style={[styles.input, { color: text, borderColor: border }]}
+        />
+        <Pressable
+          onPress={handleInvite}
+          disabled={inviting || !inviteEmail.trim()}
+          style={[
+            styles.inviteButton,
+            { backgroundColor: accent, opacity: inviting || !inviteEmail.trim() ? 0.5 : 1 },
+          ]}>
+          {inviting ? <ActivityIndicator color="#fff" /> : <ThemedText style={styles.inviteButtonText}>Invite</ThemedText>}
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function InviteBanner() {
+  const { pendingInvite, acceptInvite, declineInvite } = useGrocery();
+  const accent = useThemeColor({}, 'accent');
+  const [responding, setResponding] = useState(false);
+
+  if (!pendingInvite) return null;
+
+  const respond = async (action: 'accept' | 'decline') => {
+    setResponding(true);
+    try {
+      await (action === 'accept' ? acceptInvite() : declineInvite());
+    } finally {
+      setResponding(false);
+    }
+  };
+
+  return (
+    <ThemedView style={[styles.inviteBanner, { borderColor: accent }]}>
+      <ThemedText>
+        <ThemedText type="defaultSemiBold">{pendingInvite.listOwnerEmail}</ThemedText> invited you to
+        collaborate on their grocery list.
+      </ThemedText>
+      <View style={styles.inviteBannerActions}>
+        <Pressable onPress={() => respond('decline')} disabled={responding} style={styles.inviteBannerButton}>
+          <ThemedText style={{ opacity: 0.7 }}>Decline</ThemedText>
+        </Pressable>
+        <Pressable
+          onPress={() => respond('accept')}
+          disabled={responding}
+          style={[styles.inviteBannerButton, { backgroundColor: accent, borderRadius: 8 }]}>
+          {responding ? (
+            <ActivityIndicator color="#fff" />
+          ) : (
+            <ThemedText style={{ color: '#fff', fontWeight: '600' }}>Accept</ThemedText>
+          )}
+        </Pressable>
+      </View>
+    </ThemedView>
+  );
+}
+
+export default function GroceryScreen() {
+  const {
+    queuedRecipeIds,
+    toggleQueued,
+    groceryItems,
+    toggleGroceryItemChecked,
+    removeGroceryItem,
+    clearCheckedItems,
+  } = useGrocery();
+  const border = useThemeColor({}, 'icon');
+  const accent = useThemeColor({}, 'accent');
 
   const checkedItems = groceryItems.filter((item) => item.checked);
   const groupedSections = GROCERY_SECTIONS.map((section) => {
@@ -38,33 +203,22 @@ export default function GroceryScreen() {
       </ThemedView>
 
       <ScrollView contentContainerStyle={styles.content}>
+        <InviteBanner />
+
         <View style={styles.section}>
           <ThemedText type="subtitle">This Week</ThemedText>
-          {queuedRecipes.length === 0 ? (
+          {queuedRecipeIds.length === 0 ? (
             <ThemedText style={styles.emptyHint}>
               Open a recipe and tap &quot;Add to this week&quot; to queue it here.
             </ThemedText>
           ) : (
             <View style={styles.queuedList}>
-              {queuedRecipes.map((recipe) => (
-                <Pressable
-                  key={recipe.id}
-                  onPress={() => router.push({ pathname: '/recipe/[id]', params: { id: recipe.id } })}
-                  style={[styles.queuedCard, { borderColor: border }]}>
-                  {recipe.photoUri ? (
-                    <Image source={{ uri: recipe.photoUri }} style={styles.queuedThumbnail} />
-                  ) : (
-                    <View style={[styles.queuedThumbnail, styles.queuedThumbnailPlaceholder, { borderColor: border }]}>
-                      <IconSymbol name="fork.knife" size={20} color={border} />
-                    </View>
-                  )}
-                  <ThemedText style={styles.queuedTitle} numberOfLines={2}>
-                    {recipe.title}
-                  </ThemedText>
-                  <Pressable onPress={() => toggleQueued(recipe.id)} hitSlop={8}>
-                    <IconSymbol name="xmark" size={16} color={border} />
-                  </Pressable>
-                </Pressable>
+              {queuedRecipeIds.map((recipeId) => (
+                <QueuedRecipeCard
+                  key={recipeId}
+                  recipeId={recipeId}
+                  onUnqueue={() => toggleQueued(recipeId)}
+                />
               ))}
             </View>
           )}
@@ -116,6 +270,8 @@ export default function GroceryScreen() {
             ))
           )}
         </View>
+
+        <SharingSection />
       </ScrollView>
     </SafeAreaView>
   );
@@ -204,5 +360,45 @@ const styles = StyleSheet.create({
   groceryRecipeLabel: {
     fontSize: 12,
     opacity: 0.5,
+  },
+  collaboratorList: {
+    gap: 4,
+  },
+  importRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  input: {
+    flex: 1,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 16,
+  },
+  inviteButton: {
+    borderRadius: 10,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  inviteButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  inviteBanner: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 12,
+    padding: 14,
+    gap: 10,
+  },
+  inviteBannerActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 16,
+  },
+  inviteBannerButton: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
 });

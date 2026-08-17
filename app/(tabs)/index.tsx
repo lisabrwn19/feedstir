@@ -6,6 +6,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { useAuth } from '@/context/auth-context';
 import { useRecipes } from '@/context/recipes-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import type { Recipe } from '@/types/recipe';
@@ -49,6 +50,7 @@ function RecipeCard({ recipe }: { recipe: Recipe }) {
 
 export default function RecipesScreen() {
   const { recipes } = useRecipes();
+  const { signOut } = useAuth();
   const router = useRouter();
   const accentColor = useThemeColor({}, 'accent');
   const borderColor = useThemeColor({}, 'icon');
@@ -57,12 +59,17 @@ export default function RecipesScreen() {
     <SafeAreaView style={styles.container} edges={['top']}>
       <ThemedView style={styles.header}>
         <ThemedText type="title">Recipes</ThemedText>
-        <Pressable
-          onPress={() => router.push('/recipe/new')}
-          style={[styles.addButton, { backgroundColor: accentColor }]}
-          hitSlop={8}>
-          <IconSymbol name="plus" size={20} color="#fff" />
-        </Pressable>
+        <View style={styles.headerActions}>
+          <Pressable onPress={() => signOut()} hitSlop={8} style={styles.signOutButton}>
+            <IconSymbol name="rectangle.portrait.and.arrow.right" size={20} color={borderColor} />
+          </Pressable>
+          <Pressable
+            onPress={() => router.push('/recipe/new')}
+            style={[styles.addButton, { backgroundColor: accentColor }]}
+            hitSlop={8}>
+            <IconSymbol name="plus" size={20} color="#fff" />
+          </Pressable>
+        </View>
       </ThemedView>
 
       {recipes.length === 0 ? (
@@ -103,6 +110,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 12,
     paddingBottom: 16,
+  },
+  headerActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  signOutButton: {
+    padding: 4,
   },
   addButton: {
     width: 36,

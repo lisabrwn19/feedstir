@@ -8,9 +8,11 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
+import { useAuth } from '@/context/auth-context';
 import { useRecipes } from '@/context/recipes-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { fetchAndParseRecipe } from '@/utils/parse-recipe';
+import { isLocalPhotoUri, uploadRecipePhoto } from '@/utils/upload-photo';
 
 function useFieldColors() {
   const text = useThemeColor({}, 'text');
@@ -83,6 +85,7 @@ function ListEditor({
 
 export default function NewRecipeScreen() {
   const router = useRouter();
+  const { user } = useAuth();
   const { addRecipe } = useRecipes();
   const { text, border, placeholder } = useFieldColors();
   const background = useThemeColor({}, 'background');
@@ -161,7 +164,10 @@ export default function NewRecipeScreen() {
     }
   };
 
-  const handleSave = () => {
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'uploading' | 'saving'>('idle');
+  const saving = saveStatus !== 'idle';
+
+  const handleSave = async () => {
     const trimmedTitle = title.trim();
     const cleanIngredients = ingredients.map((i) => i.trim()).filter(Boolean);
     const cleanInstructions = instructions.map((i) => i.trim()).filter(Boolean);
@@ -178,23 +184,40 @@ export default function NewRecipeScreen() {
       Alert.alert('Instructions required', 'Add at least one instruction step.');
       return;
     }
+    if (!user) {
+      Alert.alert('Not signed in', 'Sign in to save a recipe.');
+      return;
+    }
 
     const parsedServings = parseInt(servings, 10);
     const parsedPrepTime = parseInt(prepTime, 10);
     const parsedCookTime = parseInt(cookTime, 10);
 
-    addRecipe({
-      title: trimmedTitle,
-      ingredients: cleanIngredients,
-      instructions: cleanInstructions,
-      photoUri,
-      servings: Number.isFinite(parsedServings) ? parsedServings : undefined,
-      prepTimeMinutes: Number.isFinite(parsedPrepTime) ? parsedPrepTime : undefined,
-      cookTimeMinutes: Number.isFinite(parsedCookTime) ? parsedCookTime : undefined,
-      sourceUrl: sourceUrl.trim() || undefined,
-    });
+    try {
+      let finalPhotoUri = photoUri;
+      if (photoUri && isLocalPhotoUri(photoUri)) {
+        setSaveStatus('uploading');
+        finalPhotoUri = await uploadRecipePhoto(photoUri, user.uid);
+      }
 
-    router.back();
+      setSaveStatus('saving');
+      await addRecipe({
+        title: trimmedTitle,
+        ingredients: cleanIngredients,
+        instructions: cleanInstructions,
+        photoUri: finalPhotoUri,
+        servings: Number.isFinite(parsedServings) ? parsedServings : undefined,
+        prepTimeMinutes: Number.isFinite(parsedPrepTime) ? parsedPrepTime : undefined,
+        cookTimeMinutes: Number.isFinite(parsedCookTime) ? parsedCookTime : undefined,
+        sourceUrl: sourceUrl.trim() || undefined,
+      });
+      router.back();
+    } catch (err) {
+      console.error('Failed to save recipe:', err);
+      Alert.alert('Could not save', 'Something went wrong saving your recipe. Try again.');
+    } finally {
+      setSaveStatus('idle');
+    }
   };
 
   return (
@@ -333,8 +356,18 @@ export default function NewRecipeScreen() {
         <SafeAreaView edges={['bottom']}>
           <Pressable
             onPress={handleSave}
-            style={[styles.saveButton, { backgroundColor: accent }]}>
-            <ThemedText style={styles.saveButtonText}>Save Recipe</ThemedText>
+            disabled={saving}
+            style={[styles.saveButton, { backgroundColor: accent, opacity: saving ? 0.6 : 1 }]}>
+            {saving ? (
+              <View style={styles.savingRow}>
+                <ActivityIndicator color="#fff" />
+                <ThemedText style={styles.saveButtonText}>
+                  {saveStatus === 'uploading' ? 'Uploading photo…' : 'Saving…'}
+                </ThemedText>
+              </View>
+            ) : (
+              <ThemedText style={styles.saveButtonText}>Save Recipe</ThemedText>
+            )}
           </Pressable>
         </SafeAreaView>
       </Animated.View>
@@ -435,6 +468,11 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingVertical: 14,
     alignItems: 'center',
+  },
+  savingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   saveButtonText: {
     color: '#fff',

@@ -31,6 +31,7 @@ const MAPPING = {
   'cart.fill': 'shopping-cart',
   'star.fill': 'star',
   star: 'star-border',
+  'rectangle.portrait.and.arrow.right': 'logout',
 } as IconMapping;
 
 /**

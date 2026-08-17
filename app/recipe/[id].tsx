@@ -6,8 +6,9 @@ import { ExternalLink } from '@/components/external-link';
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { useAuth } from '@/context/auth-context';
 import { useGrocery } from '@/context/grocery-context';
-import { useRecipes } from '@/context/recipes-context';
+import { useRecipeDoc, useRecipes } from '@/context/recipes-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
 
 // Matches the `accent` theme color (#0a7ea4), which is fixed across light/dark.
@@ -48,13 +49,22 @@ function StarRating({
 
 export default function RecipeDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const { recipes, markRecipeMade, setRecipeRating } = useRecipes();
+  const { user } = useAuth();
+  const { markRecipeMade, setRecipeRating } = useRecipes();
   const { isQueued, toggleQueued, isIngredientAdded, toggleGroceryIngredient } = useGrocery();
   const border = useThemeColor({}, 'icon');
   const accent = useThemeColor({}, 'accent');
-  const recipe = recipes.find((r) => r.id === id);
+  const recipe = useRecipeDoc(id);
 
-  if (!recipe) {
+  if (recipe === undefined) {
+    return (
+      <ThemedView style={styles.notFound}>
+        <ThemedText>Loading…</ThemedText>
+      </ThemedView>
+    );
+  }
+
+  if (recipe === null) {
     return (
       <ThemedView style={styles.notFound}>
         <ThemedText>Recipe not found.</ThemedText>
@@ -62,6 +72,7 @@ export default function RecipeDetailScreen() {
     );
   }
 
+  const isOwner = recipe.ownerId === user?.uid;
   const queued = isQueued(recipe.id);
 
   const metaItems: { icon: 'person.2.fill' | 'clock'; label: string }[] = [];
@@ -81,39 +92,45 @@ export default function RecipeDetailScreen() {
 
       <ThemedText type="title">{recipe.title}</ThemedText>
 
-      <View style={styles.actionRow}>
-        <Pressable
-          onPress={() => toggleQueued(recipe.id)}
-          style={[
-            styles.actionButton,
-            { borderColor: accent },
-            queued && { backgroundColor: accent },
-          ]}>
-          <IconSymbol
-            name={queued ? 'checkmark.circle.fill' : 'circle'}
-            size={18}
-            color={queued ? '#fff' : accent}
-          />
-          <ThemedText style={[styles.actionButtonText, { color: queued ? '#fff' : accent }]}>
-            {queued ? 'Queued for this week' : 'Add to this week'}
-          </ThemedText>
-        </Pressable>
+      {isOwner ? (
+        <>
+          <View style={styles.actionRow}>
+            <Pressable
+              onPress={() => toggleQueued(recipe.id)}
+              style={[
+                styles.actionButton,
+                { borderColor: accent },
+                queued && { backgroundColor: accent },
+              ]}>
+              <IconSymbol
+                name={queued ? 'checkmark.circle.fill' : 'circle'}
+                size={18}
+                color={queued ? '#fff' : accent}
+              />
+              <ThemedText style={[styles.actionButtonText, { color: queued ? '#fff' : accent }]}>
+                {queued ? 'Queued for this week' : 'Add to this week'}
+              </ThemedText>
+            </Pressable>
 
-        <Pressable
-          onPress={() => markRecipeMade(recipe.id)}
-          style={[styles.actionButton, { borderColor: accent }]}>
-          <IconSymbol
-            name={recipe.timesMade > 0 ? 'checkmark.circle.fill' : 'circle'}
-            size={18}
-            color={accent}
-          />
-          <ThemedText style={[styles.actionButtonText, { color: accent }]}>
-            {recipe.timesMade === 0 ? 'I made this' : `Made it ${recipe.timesMade}×`}
-          </ThemedText>
-        </Pressable>
-      </View>
+            <Pressable
+              onPress={() => markRecipeMade(recipe.id)}
+              style={[styles.actionButton, { borderColor: accent }]}>
+              <IconSymbol
+                name={recipe.timesMade > 0 ? 'checkmark.circle.fill' : 'circle'}
+                size={18}
+                color={accent}
+              />
+              <ThemedText style={[styles.actionButtonText, { color: accent }]}>
+                {recipe.timesMade === 0 ? 'I made this' : `Made it ${recipe.timesMade}×`}
+              </ThemedText>
+            </Pressable>
+          </View>
 
-      <StarRating rating={recipe.rating} onChange={(value) => setRecipeRating(recipe.id, value)} />
+          <StarRating rating={recipe.rating} onChange={(value) => setRecipeRating(recipe.id, value)} />
+        </>
+      ) : (
+        <ThemedText style={styles.sharedNote}>Shared with you on your grocery list.</ThemedText>
+      )}
 
       {metaItems.length > 0 ? (
         <View style={styles.metaRow}>
@@ -222,6 +239,11 @@ const styles = StyleSheet.create({
   starRow: {
     flexDirection: 'row',
     gap: 6,
+  },
+  sharedNote: {
+    fontSize: 13,
+    opacity: 0.6,
+    fontStyle: 'italic',
   },
   section: {
     gap: 10,
