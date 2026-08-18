@@ -42,13 +42,21 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "Feedstir uses your photos to add a picture to a recipe."
+          "photosPermission": "Feedstir uses your photos to add a picture to a recipe.",
+          "microphonePermission": false
         }
       ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "6f9144fb-9c39-4846-8e89-70c62d60ae3a"
+      }
+    },
+    "owner": "lisabrwn19"
   }
 }
