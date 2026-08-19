@@ -26,7 +26,7 @@ function useUserEmail(uid: string | undefined) {
   return email;
 }
 
-function QueuedRecipeCard({ recipeId, onUnqueue }: { recipeId: string; onUnqueue: () => void }) {
+function QueuedRecipeCard({ recipeId }: { recipeId: string }) {
   const router = useRouter();
   const border = useThemeColor({}, 'icon');
   const recipe = useRecipeDoc(recipeId);
@@ -47,9 +47,6 @@ function QueuedRecipeCard({ recipeId, onUnqueue }: { recipeId: string; onUnqueue
       <ThemedText style={styles.queuedTitle} numberOfLines={2}>
         {recipe.title}
       </ThemedText>
-      <Pressable onPress={onUnqueue} hitSlop={8}>
-        <IconSymbol name="xmark" size={16} color={border} />
-      </Pressable>
     </Pressable>
   );
 }
@@ -179,14 +176,23 @@ function InviteBanner() {
 export default function GroceryScreen() {
   const {
     queuedRecipeIds,
-    toggleQueued,
     groceryItems,
     toggleGroceryItemChecked,
     removeGroceryItem,
+    addManualItem,
     clearCheckedItems,
   } = useGrocery();
+  const text = useThemeColor({}, 'text');
   const border = useThemeColor({}, 'icon');
   const accent = useThemeColor({}, 'accent');
+
+  const [manualItemText, setManualItemText] = useState('');
+
+  const handleAddManualItem = () => {
+    if (!manualItemText.trim()) return;
+    addManualItem(manualItemText);
+    setManualItemText('');
+  };
 
   const checkedItems = groceryItems.filter((item) => item.checked);
   const groupedSections = GROCERY_SECTIONS.map((section) => {
@@ -206,21 +212,22 @@ export default function GroceryScreen() {
         <InviteBanner />
 
         <View style={styles.section}>
-          <ThemedText type="subtitle">This Week</ThemedText>
+          <ThemedText type="subtitle">Upcoming Menu</ThemedText>
           {queuedRecipeIds.length === 0 ? (
             <ThemedText style={styles.emptyHint}>
-              Open a recipe and tap &quot;Add to this week&quot; to queue it here.
+              Open a recipe and tap &quot;Add to Upcoming Menu&quot; to queue it here.
             </ThemedText>
           ) : (
-            <View style={styles.queuedList}>
-              {queuedRecipeIds.map((recipeId) => (
-                <QueuedRecipeCard
-                  key={recipeId}
-                  recipeId={recipeId}
-                  onUnqueue={() => toggleQueued(recipeId)}
-                />
-              ))}
-            </View>
+            <>
+              <View style={styles.queuedList}>
+                {queuedRecipeIds.map((recipeId) => (
+                  <QueuedRecipeCard key={recipeId} recipeId={recipeId} />
+                ))}
+              </View>
+              <ThemedText style={styles.sectionHint}>
+                Open a recipe to remove it from your Upcoming Menu.
+              </ThemedText>
+            </>
           )}
         </View>
 
@@ -234,9 +241,30 @@ export default function GroceryScreen() {
             ) : null}
           </View>
 
+          <View style={styles.importRow}>
+            <TextInput
+              value={manualItemText}
+              onChangeText={setManualItemText}
+              placeholder="Add an item"
+              placeholderTextColor={border}
+              onSubmitEditing={handleAddManualItem}
+              returnKeyType="done"
+              style={[styles.input, { color: text, borderColor: border }]}
+            />
+            <Pressable
+              onPress={handleAddManualItem}
+              disabled={!manualItemText.trim()}
+              style={[
+                styles.inviteButton,
+                { backgroundColor: accent, opacity: manualItemText.trim() ? 1 : 0.5 },
+              ]}>
+              <IconSymbol name="plus" size={20} color="#fff" />
+            </Pressable>
+          </View>
+
           {groupedSections.length === 0 ? (
             <ThemedText style={styles.emptyHint}>
-              Tap ingredients on a recipe to add them to your list.
+              Tap ingredients on a recipe, or add an item above.
             </ThemedText>
           ) : (
             groupedSections.map(({ section, items }) => (
@@ -258,7 +286,9 @@ export default function GroceryScreen() {
                         <ThemedText style={item.checked ? styles.groceryTextChecked : undefined}>
                           {item.text}
                         </ThemedText>
-                        <ThemedText style={styles.groceryRecipeLabel}>{item.recipeTitle}</ThemedText>
+                        {item.recipeTitle ? (
+                          <ThemedText style={styles.groceryRecipeLabel}>{item.recipeTitle}</ThemedText>
+                        ) : null}
                       </View>
                     </Pressable>
                     <Pressable onPress={() => removeGroceryItem(item.id)} hitSlop={8}>
@@ -300,6 +330,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
   emptyHint: {
+    opacity: 0.6,
+  },
+  sectionHint: {
+    fontSize: 13,
     opacity: 0.6,
   },
   queuedList: {

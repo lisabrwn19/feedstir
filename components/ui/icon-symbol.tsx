@@ -32,6 +32,9 @@ const MAPPING = {
   'star.fill': 'star',
   star: 'star-border',
   'rectangle.portrait.and.arrow.right': 'logout',
+  pencil: 'edit',
+  trash: 'delete',
+  ellipsis: 'more-horiz',
 } as IconMapping;
 
 /**

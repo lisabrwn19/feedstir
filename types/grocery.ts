@@ -2,8 +2,9 @@ export type GroceryItem = {
   id: string;
   text: string;
   checked: boolean;
-  recipeId: string;
-  recipeTitle: string;
+  /** Absent for items added manually (not sourced from a recipe ingredient). */
+  recipeId?: string;
+  recipeTitle?: string;
   addedBy: string;
 };
 

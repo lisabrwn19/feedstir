@@ -1,6 +1,9 @@
 import {
   addDoc,
+  arrayRemove,
+  arrayUnion,
   collection,
+  deleteDoc,
   deleteField,
   doc,
   onSnapshot,
@@ -21,8 +24,13 @@ type RecipesContextValue = {
   recipes: Recipe[];
   loading: boolean;
   addRecipe: (input: NewRecipeInput) => Promise<void>;
+  updateRecipe: (id: string, input: NewRecipeInput) => Promise<void>;
+  deleteRecipe: (id: string) => Promise<void>;
   markRecipeMade: (id: string) => void;
   setRecipeRating: (id: string, rating: number | undefined) => void;
+  setRecipeDifficulty: (id: string, difficulty: Recipe['difficulty']) => void;
+  addRecipeModification: (id: string, text: string) => void;
+  removeRecipeModification: (id: string, text: string) => void;
 };
 
 const RecipesContext = createContext<RecipesContextValue | undefined>(undefined);
@@ -41,6 +49,18 @@ function stripUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
   return result;
 }
 
+// For updates (unlike create), a field going from "set" to `undefined` means
+// the user cleared it in the edit form — that has to actually delete the
+// field in Firestore, not just be omitted from the write (omitting would
+// silently leave the old value in place).
+function toFirestoreUpdate<T extends Record<string, unknown>>(obj: T): Record<string, unknown> {
+  const result: Record<string, unknown> = {};
+  for (const key in obj) {
+    result[key] = obj[key] === undefined ? deleteField() : obj[key];
+  }
+  return result;
+}
+
 function mapRecipe(id: string, data: DocumentData): Recipe {
   return {
     id,
@@ -48,6 +68,7 @@ function mapRecipe(id: string, data: DocumentData): Recipe {
     title: data.title,
     ingredients: data.ingredients ?? [],
     instructions: data.instructions ?? [],
+    modifications: data.modifications ?? [],
     photoUri: data.photoUri ?? undefined,
     servings: data.servings ?? undefined,
     prepTimeMinutes: data.prepTimeMinutes ?? undefined,
@@ -57,6 +78,7 @@ function mapRecipe(id: string, data: DocumentData): Recipe {
     timesMade: data.timesMade ?? 0,
     lastMadeAt: data.lastMadeAt ?? undefined,
     rating: data.rating ?? undefined,
+    difficulty: data.difficulty ?? undefined,
     queuedOnListId: data.queuedOnListId ?? null,
   };
 }
@@ -95,8 +117,15 @@ export function RecipesProvider({ children }: { children: ReactNode }) {
           createdAt: Date.now(),
           timesMade: 0,
           rating: null,
+          modifications: [],
           queuedOnListId: null,
         });
+      },
+      updateRecipe: async (id, input) => {
+        await updateDoc(doc(db, 'recipes', id), toFirestoreUpdate(input));
+      },
+      deleteRecipe: async (id) => {
+        await deleteDoc(doc(db, 'recipes', id));
       },
       markRecipeMade: (id) => {
         const recipe = recipes.find((r) => r.id === id);
@@ -109,6 +138,19 @@ export function RecipesProvider({ children }: { children: ReactNode }) {
         updateDoc(doc(db, 'recipes', id), {
           rating: rating ?? deleteField(),
         });
+      },
+      setRecipeDifficulty: (id, difficulty) => {
+        updateDoc(doc(db, 'recipes', id), {
+          difficulty: difficulty ?? deleteField(),
+        });
+      },
+      addRecipeModification: (id, text) => {
+        const trimmed = text.trim();
+        if (!trimmed) return;
+        updateDoc(doc(db, 'recipes', id), { modifications: arrayUnion(trimmed) });
+      },
+      removeRecipeModification: (id, text) => {
+        updateDoc(doc(db, 'recipes', id), { modifications: arrayRemove(text) });
       },
     }),
     [recipes, loading, user]

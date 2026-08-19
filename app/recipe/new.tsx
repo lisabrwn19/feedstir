@@ -1,15 +1,16 @@
 import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
-import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { useEffect, useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import Animated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
+import { ThemedView } from '@/components/themed-view';
 import { useAuth } from '@/context/auth-context';
-import { useRecipes } from '@/context/recipes-context';
+import { useRecipeDoc, useRecipes } from '@/context/recipes-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { fetchAndParseRecipe } from '@/utils/parse-recipe';
 import { isLocalPhotoUri, uploadRecipePhoto } from '@/utils/upload-photo';
@@ -85,8 +86,11 @@ function ListEditor({
 
 export default function NewRecipeScreen() {
   const router = useRouter();
+  const { id } = useLocalSearchParams<{ id?: string }>();
+  const isEditing = !!id;
   const { user } = useAuth();
-  const { addRecipe } = useRecipes();
+  const { addRecipe, updateRecipe } = useRecipes();
+  const existingRecipe = useRecipeDoc(id);
   const { text, border, placeholder } = useFieldColors();
   const background = useThemeColor({}, 'background');
   const accent = useThemeColor({}, 'accent');
@@ -104,6 +108,23 @@ export default function NewRecipeScreen() {
   const [sourceUrl, setSourceUrl] = useState('');
   const [ingredients, setIngredients] = useState(['']);
   const [instructions, setInstructions] = useState(['']);
+  const [loadedExistingId, setLoadedExistingId] = useState<string | undefined>();
+
+  // Pre-fill the form once the existing recipe loads. Keyed on the recipe's
+  // own id (not just `isEditing`) so it only runs once per recipe, not on
+  // every keystroke as the user edits the pre-filled fields.
+  useEffect(() => {
+    if (!existingRecipe || loadedExistingId === existingRecipe.id) return;
+    setTitle(existingRecipe.title);
+    setPhotoUri(existingRecipe.photoUri);
+    setServings(existingRecipe.servings ? String(existingRecipe.servings) : '');
+    setPrepTime(existingRecipe.prepTimeMinutes ? String(existingRecipe.prepTimeMinutes) : '');
+    setCookTime(existingRecipe.cookTimeMinutes ? String(existingRecipe.cookTimeMinutes) : '');
+    setSourceUrl(existingRecipe.sourceUrl ?? '');
+    setIngredients(existingRecipe.ingredients.length ? existingRecipe.ingredients : ['']);
+    setInstructions(existingRecipe.instructions.length ? existingRecipe.instructions : ['']);
+    setLoadedExistingId(existingRecipe.id);
+  }, [existingRecipe, loadedExistingId]);
 
   const [importUrl, setImportUrl] = useState('');
   const [importing, setImporting] = useState(false);
@@ -201,7 +222,7 @@ export default function NewRecipeScreen() {
       }
 
       setSaveStatus('saving');
-      await addRecipe({
+      const payload = {
         title: trimmedTitle,
         ingredients: cleanIngredients,
         instructions: cleanInstructions,
@@ -210,7 +231,12 @@ export default function NewRecipeScreen() {
         prepTimeMinutes: Number.isFinite(parsedPrepTime) ? parsedPrepTime : undefined,
         cookTimeMinutes: Number.isFinite(parsedCookTime) ? parsedCookTime : undefined,
         sourceUrl: sourceUrl.trim() || undefined,
-      });
+      };
+      if (isEditing && id) {
+        await updateRecipe(id, payload);
+      } else {
+        await addRecipe(payload);
+      }
       router.back();
     } catch (err) {
       console.error('Failed to save recipe:', err);
@@ -220,44 +246,62 @@ export default function NewRecipeScreen() {
     }
   };
 
+  if (isEditing && existingRecipe === undefined) {
+    return (
+      <ThemedView style={styles.centered}>
+        <ThemedText>Loading…</ThemedText>
+      </ThemedView>
+    );
+  }
+  if (isEditing && (existingRecipe === null || existingRecipe?.ownerId !== user?.uid)) {
+    return (
+      <ThemedView style={styles.centered}>
+        <ThemedText>Recipe not found.</ThemedText>
+      </ThemedView>
+    );
+  }
+
   return (
     <View style={styles.flex}>
+      <Stack.Screen options={{ title: isEditing ? 'Edit Recipe' : 'New Recipe' }} />
       <ScrollView
         style={styles.flex}
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled">
-        <View style={styles.field}>
-          <FieldLabel>Import from a link</FieldLabel>
-          <View style={styles.importRow}>
-            <TextInput
-              value={importUrl}
-              onChangeText={setImportUrl}
-              placeholder="Paste a recipe URL"
-              placeholderTextColor={placeholder}
-              keyboardType="url"
-              autoCapitalize="none"
-              autoCorrect={false}
-              style={[styles.input, styles.importInput, { color: text, borderColor: border }]}
-            />
-            <Pressable
-              onPress={handleImport}
-              disabled={importing || !importUrl.trim()}
-              style={[
-                styles.importButton,
-                { backgroundColor: accent, opacity: importing || !importUrl.trim() ? 0.5 : 1 },
-              ]}>
-              {importing ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <ThemedText style={styles.importButtonText}>Fetch</ThemedText>
-              )}
-            </Pressable>
+        {isEditing ? null : (
+          <View style={styles.field}>
+            <FieldLabel>Import from a link</FieldLabel>
+            <View style={styles.importRow}>
+              <TextInput
+                value={importUrl}
+                onChangeText={setImportUrl}
+                placeholder="Paste a recipe URL"
+                placeholderTextColor={placeholder}
+                keyboardType="url"
+                autoCapitalize="none"
+                autoCorrect={false}
+                style={[styles.input, styles.importInput, { color: text, borderColor: border }]}
+              />
+              <Pressable
+                onPress={handleImport}
+                disabled={importing || !importUrl.trim()}
+                style={[
+                  styles.importButton,
+                  { backgroundColor: accent, opacity: importing || !importUrl.trim() ? 0.5 : 1 },
+                ]}>
+                {importing ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <ThemedText style={styles.importButtonText}>Fetch</ThemedText>
+                )}
+              </Pressable>
+            </View>
+            {importError ? <ThemedText style={styles.importError}>{importError}</ThemedText> : null}
+            {importNotice ? (
+              <ThemedText style={{ color: border }}>{importNotice}</ThemedText>
+            ) : null}
           </View>
-          {importError ? <ThemedText style={styles.importError}>{importError}</ThemedText> : null}
-          {importNotice ? (
-            <ThemedText style={{ color: border }}>{importNotice}</ThemedText>
-          ) : null}
-        </View>
+        )}
 
         <View style={styles.field}>
           <FieldLabel>Title</FieldLabel>
@@ -366,7 +410,9 @@ export default function NewRecipeScreen() {
                 </ThemedText>
               </View>
             ) : (
-              <ThemedText style={styles.saveButtonText}>Save Recipe</ThemedText>
+              <ThemedText style={styles.saveButtonText}>
+                {isEditing ? 'Save Changes' : 'Save Recipe'}
+              </ThemedText>
             )}
           </Pressable>
         </SafeAreaView>
@@ -378,6 +424,11 @@ export default function NewRecipeScreen() {
 const styles = StyleSheet.create({
   flex: {
     flex: 1,
+  },
+  centered: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   content: {
     padding: 20,

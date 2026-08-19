@@ -11,12 +11,19 @@ import { useRecipes } from '@/context/recipes-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import type { Recipe } from '@/types/recipe';
 
+const DIFFICULTY_LABELS: Record<NonNullable<Recipe['difficulty']>, string> = {
+  easy: 'Easy',
+  moderate: 'Moderate',
+  hard: 'Hard',
+};
+
 function formatMeta(recipe: Recipe) {
   const parts: string[] = [];
   if (recipe.servings) parts.push(`${recipe.servings} servings`);
   const totalTime = (recipe.prepTimeMinutes ?? 0) + (recipe.cookTimeMinutes ?? 0);
   if (totalTime > 0) parts.push(`${totalTime} min`);
-  if (recipe.rating) parts.push(`★${recipe.rating}`);
+  if (recipe.rating !== undefined) parts.push(`${recipe.rating}/5 ★`);
+  if (recipe.difficulty) parts.push(DIFFICULTY_LABELS[recipe.difficulty]);
   if (recipe.timesMade > 0) parts.push(`Made ${recipe.timesMade}×`);
   return parts.join(' · ');
 }

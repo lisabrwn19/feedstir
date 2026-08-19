@@ -38,6 +38,8 @@ type GroceryContextValue = {
   toggleGroceryIngredient: (recipeId: string, recipeTitle: string, text: string) => void;
   toggleGroceryItemChecked: (id: string) => void;
   removeGroceryItem: (id: string) => void;
+  removeItemsForRecipe: (recipeId: string) => void;
+  addManualItem: (text: string) => void;
   clearCheckedItems: () => void;
 
   inviteCollaborator: (email: string) => Promise<void>;
@@ -193,20 +195,36 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
       },
 
       groceryItems,
+      // Checked-off items no longer count as "added" from the recipe's point
+      // of view — once you've bought it, the recipe should let you add it
+      // again rather than showing it as still on the list.
       isIngredientAdded: (recipeId, text) => {
         const normalized = normalizeIngredientText(text);
         return groceryItems.some(
-          (item) => item.recipeId === recipeId && normalizeIngredientText(item.text) === normalized
+          (item) =>
+            item.recipeId === recipeId &&
+            normalizeIngredientText(item.text) === normalized &&
+            !item.checked
         );
       },
       toggleGroceryIngredient: (recipeId, recipeTitle, text) => {
         if (!activeListId || !myUid) return;
         const normalized = normalizeIngredientText(text);
-        const existing = groceryItems.find(
+        const matches = groceryItems.filter(
           (item) => item.recipeId === recipeId && normalizeIngredientText(item.text) === normalized
         );
-        if (existing) {
-          deleteDoc(doc(db, 'groceryLists', activeListId, 'items', existing.id));
+        const active = matches.find((item) => !item.checked);
+        if (active) {
+          deleteDoc(doc(db, 'groceryLists', activeListId, 'items', active.id));
+          return;
+        }
+        const checkedMatch = matches.find((item) => item.checked);
+        if (checkedMatch) {
+          // Re-add by clearing the checked flag instead of creating a
+          // duplicate row for the same ingredient.
+          updateDoc(doc(db, 'groceryLists', activeListId, 'items', checkedMatch.id), {
+            checked: false,
+          });
         } else {
           addDoc(collection(db, 'groceryLists', activeListId, 'items'), {
             text: text.trim(),
@@ -226,6 +244,27 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
       removeGroceryItem: (id) => {
         if (!activeListId) return;
         deleteDoc(doc(db, 'groceryLists', activeListId, 'items', id));
+      },
+      removeItemsForRecipe: (recipeId) => {
+        if (!activeListId) return;
+        groceryItems
+          .filter((item) => item.recipeId === recipeId)
+          .forEach((item) => deleteDoc(doc(db, 'groceryLists', activeListId, 'items', item.id)));
+      },
+      addManualItem: (text) => {
+        if (!activeListId || !myUid) return;
+        const trimmed = text.trim();
+        if (!trimmed) return;
+        const normalized = normalizeIngredientText(trimmed);
+        const alreadyExists = groceryItems.some(
+          (item) => normalizeIngredientText(item.text) === normalized
+        );
+        if (alreadyExists) return;
+        addDoc(collection(db, 'groceryLists', activeListId, 'items'), {
+          text: trimmed,
+          checked: false,
+          addedBy: myUid,
+        });
       },
       clearCheckedItems: () => {
         if (!activeListId) return;

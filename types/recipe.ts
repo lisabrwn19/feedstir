@@ -4,6 +4,8 @@ export type Recipe = {
   title: string;
   ingredients: string[];
   instructions: string[];
+  /** Extra ingredients the owner has noted for this recipe, kept separate from the original ingredient list. */
+  modifications: string[];
   photoUri?: string;
   servings?: number;
   prepTimeMinutes?: number;
@@ -12,8 +14,9 @@ export type Recipe = {
   createdAt: number;
   timesMade: number;
   lastMadeAt?: number;
-  /** 1-5, undefined = unrated. */
+  /** 1-5 stars, undefined = unrated. 1 = never make this again, 5 = could eat this every day. */
   rating?: number;
+  difficulty?: 'easy' | 'moderate' | 'hard';
   /**
    * uid of the grocery list (its owner's uid) this recipe is currently
    * queued on, if any. Firestore rules grant read access to any current
@@ -25,5 +28,13 @@ export type Recipe = {
 
 export type NewRecipeInput = Omit<
   Recipe,
-  'id' | 'ownerId' | 'createdAt' | 'timesMade' | 'lastMadeAt' | 'rating' | 'queuedOnListId'
+  | 'id'
+  | 'ownerId'
+  | 'createdAt'
+  | 'timesMade'
+  | 'lastMadeAt'
+  | 'rating'
+  | 'difficulty'
+  | 'modifications'
+  | 'queuedOnListId'
 >;
