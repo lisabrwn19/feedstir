@@ -53,6 +53,11 @@ const UNITS = [
 ];
 const UNIT_PATTERN = new RegExp(`^(?:${UNITS.join('|')})\\s+`, 'i');
 
+// Dual measurements like "1 cup/250 grams flour" or "1 cup / 6 oz cheese"
+// glue a unit directly to a second quantity with a slash — no space after
+// the unit for UNIT_PATTERN to require, so it needs its own pattern.
+const UNIT_SLASH_PATTERN = new RegExp(`^(?:${UNITS.join('|')})\\s*\\/\\s*`, 'i');
+
 const OF_PATTERN = /^of\s+/i;
 
 const DESCRIPTORS = [
@@ -92,11 +97,20 @@ export function parseIngredientName(raw: string): string {
   if (commaIndex !== -1) text = text.slice(0, commaIndex);
 
   text = text.trim();
-  // "a pinch of salt" / "an onion" — treat a leading article like a "1".
-  text = text.replace(/^(a|an)\s+/i, '');
-  text = text.replace(QUANTITY_PATTERN, '');
-  text = text.replace(UNIT_PATTERN, '');
-  text = text.replace(OF_PATTERN, '');
+
+  // Repeat quantity/unit stripping — dual measurements like "1 cup/250
+  // grams flour" need two passes (one per side of the slash), and each
+  // pass may reveal another to strip.
+  let previous;
+  do {
+    previous = text;
+    // "a pinch of salt" / "an onion" — treat a leading article like a "1".
+    text = text.replace(/^(a|an)\s+/i, '');
+    text = text.replace(QUANTITY_PATTERN, '');
+    text = text.replace(UNIT_SLASH_PATTERN, '');
+    text = text.replace(UNIT_PATTERN, '');
+    text = text.replace(OF_PATTERN, '');
+  } while (text !== previous);
 
   let changed = true;
   while (changed) {

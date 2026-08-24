@@ -2,7 +2,16 @@ import { Image } from 'expo-image';
 import { useRouter } from 'expo-router';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  TextInput,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -12,6 +21,7 @@ import { useGrocery } from '@/context/grocery-context';
 import { useRecipeDoc } from '@/context/recipes-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { db } from '@/lib/firebase';
+import type { GroceryItem } from '@/types/grocery';
 import { categorizeIngredient, GROCERY_SECTIONS } from '@/utils/grocery-sections';
 
 function useUserEmail(uid: string | undefined) {
@@ -173,6 +183,48 @@ function InviteBanner() {
   );
 }
 
+function GroceryItemPreview({ item, onClose }: { item: GroceryItem | null; onClose: () => void }) {
+  const border = useThemeColor({}, 'icon');
+  const accent = useThemeColor({}, 'accent');
+
+  return (
+    <Modal visible={item !== null} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.previewBackdrop}>
+        <ThemedView style={[styles.previewCard, { borderColor: border }]}>
+          <Pressable
+            onPress={onClose}
+            hitSlop={8}
+            accessibilityLabel="Close"
+            style={styles.previewCloseButton}>
+            <IconSymbol name="xmark" size={18} color={border} />
+          </Pressable>
+
+          <ThemedText type="subtitle" style={styles.previewTitle}>
+            {item?.text}
+          </ThemedText>
+          <ThemedText style={[styles.previewSubtitle, { color: border }]}>
+            How much you need, by recipe
+          </ThemedText>
+
+          <View style={styles.previewList}>
+            {item?.sources.map((source, index) => (
+              <View key={index} style={styles.previewRow}>
+                <IconSymbol name="fork.knife" size={16} color={accent} />
+                <View style={styles.previewRowText}>
+                  <ThemedText style={styles.previewOriginal}>{source.originalText}</ThemedText>
+                  <ThemedText style={[styles.previewRecipe, { color: border }]}>
+                    {source.recipeTitle ?? 'Added manually'}
+                  </ThemedText>
+                </View>
+              </View>
+            ))}
+          </View>
+        </ThemedView>
+      </View>
+    </Modal>
+  );
+}
+
 export default function GroceryScreen() {
   const {
     queuedRecipeIds,
@@ -187,6 +239,7 @@ export default function GroceryScreen() {
   const accent = useThemeColor({}, 'accent');
 
   const [manualItemText, setManualItemText] = useState('');
+  const [previewItem, setPreviewItem] = useState<GroceryItem | null>(null);
 
   const handleAddManualItem = () => {
     if (!manualItemText.trim()) return;
@@ -284,22 +337,29 @@ export default function GroceryScreen() {
                     <View key={item.id} style={styles.groceryRow}>
                       <Pressable
                         onPress={() => toggleGroceryItemChecked(item.id)}
-                        style={styles.groceryRowMain}>
+                        hitSlop={8}
+                        accessibilityRole="checkbox"
+                        accessibilityLabel={`Mark ${item.text} as ${item.checked ? 'not bought' : 'bought'}`}
+                        style={styles.groceryCheckbox}>
                         <IconSymbol
                           name={item.checked ? 'checkmark.circle.fill' : 'circle'}
                           size={22}
                           color={item.checked ? accent : border}
                         />
-                        <View style={styles.groceryTextBlock}>
-                          <ThemedText style={item.checked ? styles.groceryTextChecked : undefined}>
-                            {item.text}
+                      </Pressable>
+                      <Pressable
+                        onPress={() => setPreviewItem(item)}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Preview ${item.text} details`}
+                        style={styles.groceryTextBlock}>
+                        <ThemedText style={item.checked ? styles.groceryTextChecked : undefined}>
+                          {item.text}
+                        </ThemedText>
+                        {recipeTitles.length > 0 ? (
+                          <ThemedText style={styles.groceryRecipeLabel}>
+                            {recipeTitles.join(', ')}
                           </ThemedText>
-                          {recipeTitles.length > 0 ? (
-                            <ThemedText style={styles.groceryRecipeLabel}>
-                              {recipeTitles.join(', ')}
-                            </ThemedText>
-                          ) : null}
-                        </View>
+                        ) : null}
                       </Pressable>
                       <Pressable onPress={() => removeGroceryItem(item.id)} hitSlop={8}>
                         <IconSymbol name="xmark" size={16} color={border} />
@@ -314,6 +374,8 @@ export default function GroceryScreen() {
 
         <SharingSection />
       </ScrollView>
+
+      <GroceryItemPreview item={previewItem} onClose={() => setPreviewItem(null)} />
     </SafeAreaView>
   );
 }
@@ -389,11 +451,8 @@ const styles = StyleSheet.create({
     gap: 8,
     paddingVertical: 6,
   },
-  groceryRowMain: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    flex: 1,
+  groceryCheckbox: {
+    padding: 2,
   },
   groceryTextBlock: {
     flex: 1,
@@ -445,5 +504,52 @@ const styles = StyleSheet.create({
   inviteBannerButton: {
     paddingHorizontal: 14,
     paddingVertical: 8,
+  },
+  previewBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  previewCard: {
+    width: '100%',
+    maxWidth: 400,
+    borderRadius: 16,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: 24,
+    gap: 4,
+  },
+  previewCloseButton: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    zIndex: 1,
+    padding: 4,
+  },
+  previewTitle: {
+    marginRight: 20,
+  },
+  previewSubtitle: {
+    fontSize: 13,
+    marginBottom: 12,
+  },
+  previewList: {
+    gap: 14,
+  },
+  previewRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  previewRowText: {
+    flex: 1,
+    gap: 2,
+  },
+  previewOriginal: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  previewRecipe: {
+    fontSize: 13,
   },
 });
