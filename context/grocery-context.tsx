@@ -19,8 +19,9 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 
 import { useAuth } from '@/context/auth-context';
 import { db } from '@/lib/firebase';
-import type { GroceryInvite, GroceryItem } from '@/types/grocery';
+import type { GroceryInvite, GroceryItem, GrocerySource } from '@/types/grocery';
 import { subscribeWithRetry } from '@/utils/firestore-retry';
+import { displayIngredientName, normalizeIngredientKey } from '@/utils/parse-ingredient';
 
 type GroceryContextValue = {
   loading: boolean;
@@ -50,8 +51,21 @@ type GroceryContextValue = {
 
 const GroceryContext = createContext<GroceryContextValue | undefined>(undefined);
 
-function normalizeIngredientText(text: string) {
-  return text.trim().toLowerCase();
+// Firestore rejects `undefined` array-element fields, so manual entries
+// (no recipeId/recipeTitle) must omit those keys rather than set them.
+function buildSource(
+  recipeId: string | undefined,
+  recipeTitle: string | undefined,
+  originalText: string
+): GrocerySource {
+  const source: GrocerySource = { originalText };
+  if (recipeId) source.recipeId = recipeId;
+  if (recipeTitle) source.recipeTitle = recipeTitle;
+  return source;
+}
+
+function sourcesEqual(a: GrocerySource, b: GrocerySource) {
+  return a.recipeId === b.recipeId && a.originalText === b.originalText;
 }
 
 function mapInvite(id: string, data: DocumentData): GroceryInvite {
@@ -132,8 +146,7 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
               id: d.id,
               text: data.text,
               checked: data.checked ?? false,
-              recipeId: data.recipeId,
-              recipeTitle: data.recipeTitle,
+              sources: Array.isArray(data.sources) ? data.sources : [],
               addedBy: data.addedBy,
             };
           })
@@ -195,43 +208,60 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
       },
 
       groceryItems,
+      // Ingredients are matched and merged by their clean, quantity-stripped
+      // name (e.g. "1/4 cup basil" and "2 tbsp basil" both key to "basil"),
+      // so the same item from different recipes collapses into one row.
       // Checked-off items no longer count as "added" from the recipe's point
       // of view — once you've bought it, the recipe should let you add it
       // again rather than showing it as still on the list.
       isIngredientAdded: (recipeId, text) => {
-        const normalized = normalizeIngredientText(text);
+        const key = normalizeIngredientKey(text);
         return groceryItems.some(
           (item) =>
-            item.recipeId === recipeId &&
-            normalizeIngredientText(item.text) === normalized &&
-            !item.checked
+            !item.checked &&
+            item.text.toLowerCase() === key &&
+            item.sources.some((s) => s.recipeId === recipeId && s.originalText === text)
         );
       },
       toggleGroceryIngredient: (recipeId, recipeTitle, text) => {
         if (!activeListId || !myUid) return;
-        const normalized = normalizeIngredientText(text);
-        const matches = groceryItems.filter(
-          (item) => item.recipeId === recipeId && normalizeIngredientText(item.text) === normalized
+        const key = normalizeIngredientKey(text);
+        const source = buildSource(recipeId, recipeTitle, text);
+
+        // This exact recipe line is already an active (unchecked) source —
+        // remove just that source, dropping the whole item if it was the
+        // only one.
+        const activeItem = groceryItems.find(
+          (item) =>
+            !item.checked &&
+            item.text.toLowerCase() === key &&
+            item.sources.some((s) => sourcesEqual(s, source))
         );
-        const active = matches.find((item) => !item.checked);
-        if (active) {
-          deleteDoc(doc(db, 'groceryLists', activeListId, 'items', active.id));
+        if (activeItem) {
+          const itemRef = doc(db, 'groceryLists', activeListId, 'items', activeItem.id);
+          if (activeItem.sources.length <= 1) {
+            deleteDoc(itemRef);
+          } else {
+            updateDoc(itemRef, { sources: arrayRemove(source) });
+          }
           return;
         }
-        const checkedMatch = matches.find((item) => item.checked);
-        if (checkedMatch) {
-          // Re-add by clearing the checked flag instead of creating a
-          // duplicate row for the same ingredient.
-          updateDoc(doc(db, 'groceryLists', activeListId, 'items', checkedMatch.id), {
+
+        // Otherwise merge into any existing item with the same clean name
+        // (checked or not), re-activating it rather than creating a
+        // duplicate row.
+        const mergeTarget = groceryItems.find((item) => item.text.toLowerCase() === key);
+        if (mergeTarget) {
+          updateDoc(doc(db, 'groceryLists', activeListId, 'items', mergeTarget.id), {
+            sources: arrayUnion(source),
             checked: false,
           });
         } else {
           addDoc(collection(db, 'groceryLists', activeListId, 'items'), {
-            text: text.trim(),
+            text: displayIngredientName(text),
             checked: false,
-            recipeId,
-            recipeTitle,
             addedBy: myUid,
+            sources: [source],
           });
         }
       },
@@ -247,23 +277,29 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
       },
       removeItemsForRecipe: (recipeId) => {
         if (!activeListId) return;
-        groceryItems
-          .filter((item) => item.recipeId === recipeId)
-          .forEach((item) => deleteDoc(doc(db, 'groceryLists', activeListId, 'items', item.id)));
+        groceryItems.forEach((item) => {
+          const remaining = item.sources.filter((s) => s.recipeId !== recipeId);
+          if (remaining.length === item.sources.length) return;
+          const itemRef = doc(db, 'groceryLists', activeListId, 'items', item.id);
+          if (remaining.length === 0) {
+            deleteDoc(itemRef);
+          } else {
+            updateDoc(itemRef, { sources: remaining });
+          }
+        });
       },
       addManualItem: (text) => {
         if (!activeListId || !myUid) return;
         const trimmed = text.trim();
         if (!trimmed) return;
-        const normalized = normalizeIngredientText(trimmed);
-        const alreadyExists = groceryItems.some(
-          (item) => normalizeIngredientText(item.text) === normalized
-        );
+        const key = normalizeIngredientKey(trimmed);
+        const alreadyExists = groceryItems.some((item) => item.text.toLowerCase() === key);
         if (alreadyExists) return;
         addDoc(collection(db, 'groceryLists', activeListId, 'items'), {
-          text: trimmed,
+          text: displayIngredientName(trimmed),
           checked: false,
           addedBy: myUid,
+          sources: [buildSource(undefined, undefined, trimmed)],
         });
       },
       clearCheckedItems: () => {

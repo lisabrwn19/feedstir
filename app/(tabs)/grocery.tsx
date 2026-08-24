@@ -272,30 +272,41 @@ export default function GroceryScreen() {
                 <ThemedText style={[styles.sectionLabel, { color: border }]}>
                   {section.toUpperCase()}
                 </ThemedText>
-                {items.map((item) => (
-                  <View key={item.id} style={styles.groceryRow}>
-                    <Pressable
-                      onPress={() => toggleGroceryItemChecked(item.id)}
-                      style={styles.groceryRowMain}>
-                      <IconSymbol
-                        name={item.checked ? 'checkmark.circle.fill' : 'circle'}
-                        size={22}
-                        color={item.checked ? accent : border}
-                      />
-                      <View style={styles.groceryTextBlock}>
-                        <ThemedText style={item.checked ? styles.groceryTextChecked : undefined}>
-                          {item.text}
-                        </ThemedText>
-                        {item.recipeTitle ? (
-                          <ThemedText style={styles.groceryRecipeLabel}>{item.recipeTitle}</ThemedText>
-                        ) : null}
-                      </View>
-                    </Pressable>
-                    <Pressable onPress={() => removeGroceryItem(item.id)} hitSlop={8}>
-                      <IconSymbol name="xmark" size={16} color={border} />
-                    </Pressable>
-                  </View>
-                ))}
+                {items.map((item) => {
+                  const recipeTitles = Array.from(
+                    new Set(
+                      item.sources
+                        .map((s) => s.recipeTitle)
+                        .filter((title): title is string => Boolean(title))
+                    )
+                  );
+                  return (
+                    <View key={item.id} style={styles.groceryRow}>
+                      <Pressable
+                        onPress={() => toggleGroceryItemChecked(item.id)}
+                        style={styles.groceryRowMain}>
+                        <IconSymbol
+                          name={item.checked ? 'checkmark.circle.fill' : 'circle'}
+                          size={22}
+                          color={item.checked ? accent : border}
+                        />
+                        <View style={styles.groceryTextBlock}>
+                          <ThemedText style={item.checked ? styles.groceryTextChecked : undefined}>
+                            {item.text}
+                          </ThemedText>
+                          {recipeTitles.length > 0 ? (
+                            <ThemedText style={styles.groceryRecipeLabel}>
+                              {recipeTitles.join(', ')}
+                            </ThemedText>
+                          ) : null}
+                        </View>
+                      </Pressable>
+                      <Pressable onPress={() => removeGroceryItem(item.id)} hitSlop={8}>
+                        <IconSymbol name="xmark" size={16} color={border} />
+                      </Pressable>
+                    </View>
+                  );
+                })}
               </View>
             ))
           )}
