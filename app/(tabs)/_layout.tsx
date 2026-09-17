@@ -7,12 +7,14 @@ import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
+  // `useColorScheme()` can also return 'unspecified' — treat anything but an
+  // explicit 'dark' as light.
+  const colorScheme = useColorScheme() === 'dark' ? 'dark' : 'light';
 
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
+        tabBarActiveTintColor: Colors[colorScheme].tint,
         headerShown: false,
         tabBarButton: HapticTab,
       }}>
@@ -21,6 +23,13 @@ export default function TabLayout() {
         options={{
           title: 'Recipes',
           tabBarIcon: ({ color }) => <IconSymbol size={28} name="fork.knife" color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="menus"
+        options={{
+          title: 'Menus',
+          tabBarIcon: ({ color }) => <IconSymbol size={28} name="list.bullet" color={color} />,
         }}
       />
       <Tabs.Screen

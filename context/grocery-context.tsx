@@ -4,6 +4,7 @@ import {
   arrayUnion,
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   onSnapshot,
@@ -19,7 +20,7 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 
 import { useAuth } from '@/context/auth-context';
 import { db } from '@/lib/firebase';
-import type { GroceryInvite, GroceryItem, GrocerySource } from '@/types/grocery';
+import type { GroceryInvite, GroceryItem, GrocerySource, Menu } from '@/types/grocery';
 import { subscribeWithRetry } from '@/utils/firestore-retry';
 import { displayIngredientName, normalizeIngredientKey } from '@/utils/parse-ingredient';
 
@@ -30,9 +31,25 @@ type GroceryContextValue = {
   isOwnList: boolean;
   collaboratorIds: string[];
 
-  queuedRecipeIds: string[];
-  isQueued: (recipeId: string) => boolean;
-  toggleQueued: (recipeId: string) => void;
+  /** Numbered menu slots — index 0 is the one you're actively cooking from. Not tied to weeks or any calendar cadence. */
+  menus: Menu[];
+  isQueuedInMenu: (recipeId: string, menuIndex: number) => boolean;
+  /** Every menu index (in order) that currently includes this recipe. */
+  menusContainingRecipe: (recipeId: string) => number[];
+  addRecipeToMenu: (recipeId: string, menuIndex: number) => void;
+  removeRecipeFromMenu: (recipeId: string, menuIndex: number) => void;
+  /** Creates a new empty menu after the last one and queues this recipe into it, in one step. */
+  addRecipeToNewMenu: (recipeId: string) => void;
+  /** Creates a new empty menu after the last one, for planning ahead without a recipe yet. */
+  addNewMenu: () => void;
+  /** Shifts every menu down one slot (menu 2 becomes menu 1, etc.), dropping the old menu 1. */
+  startNextMenu: () => void;
+  /** Removes a menu entirely and renumbers the rest to stay contiguous. Doesn't touch the grocery list. */
+  deleteMenu: (menuIndex: number) => void;
+  /** Sets or clears a menu's optional calendar date range (YYYY-MM-DD). Pass undefined for either to clear it. */
+  setMenuDates: (menuIndex: number, startDate: string | undefined, endDate: string | undefined) => void;
+  /** Sets or clears a menu's optional custom name. Pass undefined (or blank) to fall back to its positional label. */
+  setMenuName: (menuIndex: number, name: string | undefined) => void;
 
   groceryItems: GroceryItem[];
   isIngredientAdded: (recipeId: string, text: string) => boolean;
@@ -68,6 +85,46 @@ function sourcesEqual(a: GrocerySource, b: GrocerySource) {
   return a.recipeId === b.recipeId && a.originalText === b.originalText;
 }
 
+// `menus` is stored as a map keyed by index ("0", "1", ...) rather than a
+// Firestore array, so each menu's `recipeIds` can be updated atomically with
+// arrayUnion/arrayRemove without touching (or racing) any other menu.
+function parseMenusMap(menusField: Record<string, unknown>): Menu[] {
+  const indexes = Object.keys(menusField)
+    .map((k) => parseInt(k, 10))
+    .filter((n) => Number.isInteger(n) && n >= 0);
+  if (indexes.length === 0) return [];
+  const maxIndex = Math.max(...indexes);
+  const result: Menu[] = [];
+  for (let i = 0; i <= maxIndex; i++) {
+    const entry = menusField[String(i)] as
+      | { recipeIds?: unknown; name?: unknown; startDate?: unknown; endDate?: unknown }
+      | undefined;
+    result.push({
+      recipeIds: Array.isArray(entry?.recipeIds) ? (entry.recipeIds as string[]) : [],
+      name: typeof entry?.name === 'string' ? entry.name : undefined,
+      startDate: typeof entry?.startDate === 'string' ? entry.startDate : undefined,
+      endDate: typeof entry?.endDate === 'string' ? entry.endDate : undefined,
+    });
+  }
+  return result;
+}
+
+function recipeInAnyMenu(menus: Menu[], recipeId: string, excludeIndex?: number) {
+  return menus.some((m, i) => i !== excludeIndex && m.recipeIds.includes(recipeId));
+}
+
+// Firestore rejects a literal `undefined` field value outright — parsed
+// Menu objects always carry name/startDate/endDate keys (set to undefined
+// when unset), so a wholesale re-write of one (e.g. shifting them during
+// startNextMenu) must drop those keys rather than pass them through as-is.
+function stripUndefinedMenuFields(menu: Menu): Menu {
+  const clean: Menu = { recipeIds: menu.recipeIds };
+  if (menu.name !== undefined) clean.name = menu.name;
+  if (menu.startDate !== undefined) clean.startDate = menu.startDate;
+  if (menu.endDate !== undefined) clean.endDate = menu.endDate;
+  return clean;
+}
+
 function mapInvite(id: string, data: DocumentData): GroceryInvite {
   return {
     id,
@@ -88,9 +145,9 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
   // A user collaborates on at most one other list in this phase; if none,
   // they use their own.
   const [collaboratingListId, setCollaboratingListId] = useState<string | undefined>();
-  const [listDoc, setListDoc] = useState<{ collaboratorIds: string[]; queuedRecipeIds: string[] }>({
+  const [listDoc, setListDoc] = useState<{ collaboratorIds: string[]; menus: Menu[] }>({
     collaboratorIds: [],
-    queuedRecipeIds: [],
+    menus: [],
   });
   const [groceryItems, setGroceryItems] = useState<GroceryItem[]>([]);
   const [pendingInvite, setPendingInvite] = useState<GroceryInvite | undefined>();
@@ -116,7 +173,7 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
   // Listen to the active list's doc + items.
   useEffect(() => {
     if (!activeListId) {
-      setListDoc({ collaboratorIds: [], queuedRecipeIds: [] });
+      setListDoc({ collaboratorIds: [], menus: [] });
       setGroceryItems([]);
       setLoading(false);
       return;
@@ -127,9 +184,37 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
       (onNext, onError) => onSnapshot(doc(db, 'groceryLists', activeListId), onNext, onError),
       (snapshot) => {
         const data = snapshot.data();
+        const menusField = data?.menus;
+        let menus: Menu[];
+        if (menusField && typeof menusField === 'object' && !Array.isArray(menusField)) {
+          menus = parseMenusMap(menusField);
+        } else {
+          // Older data shapes, checked oldest-first so a doc only ever
+          // migrates one step even if it's several versions behind: the
+          // very first shape was a flat `queuedRecipeIds` array (always
+          // "what's queued right now"), then a `weeks` map identical in
+          // structure to today's `menus` map, just under the old name.
+          // Migrating immediately means later writes to menu 0 don't
+          // silently diverge from a field nothing reads anymore.
+          const weeksField = data?.weeks;
+          if (weeksField && typeof weeksField === 'object' && !Array.isArray(weeksField)) {
+            menus = parseMenusMap(weeksField);
+            setDoc(doc(db, 'groceryLists', activeListId), { menus: weeksField }, { merge: true });
+          } else {
+            const legacy = Array.isArray(data?.queuedRecipeIds) ? (data.queuedRecipeIds as string[]) : [];
+            menus = legacy.length > 0 ? [{ recipeIds: legacy }] : [];
+            if (legacy.length > 0) {
+              setDoc(
+                doc(db, 'groceryLists', activeListId),
+                { menus: { '0': { recipeIds: legacy } } },
+                { merge: true }
+              );
+            }
+          }
+        }
         setListDoc({
           collaboratorIds: data?.collaboratorIds ?? [],
-          queuedRecipeIds: data?.queuedRecipeIds ?? [],
+          menus,
         });
         setLoading(false);
       },
@@ -186,25 +271,129 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
       isOwnList,
       collaboratorIds: listDoc.collaboratorIds,
 
-      queuedRecipeIds: listDoc.queuedRecipeIds,
-      isQueued: (recipeId) => listDoc.queuedRecipeIds.includes(recipeId),
-      toggleQueued: (recipeId) => {
+      menus: listDoc.menus,
+      isQueuedInMenu: (recipeId, menuIndex) =>
+        listDoc.menus[menuIndex]?.recipeIds.includes(recipeId) ?? false,
+      menusContainingRecipe: (recipeId) =>
+        listDoc.menus.reduce<number[]>((acc, m, i) => {
+          if (m.recipeIds.includes(recipeId)) acc.push(i);
+          return acc;
+        }, []),
+      addRecipeToMenu: (recipeId, menuIndex) => {
         if (!listRef) return;
-        const alreadyQueued = listDoc.queuedRecipeIds.includes(recipeId);
         setDoc(
           listRef,
-          {
-            ownerId: activeListId,
-            queuedRecipeIds: alreadyQueued ? arrayRemove(recipeId) : arrayUnion(recipeId),
-          },
+          { ownerId: activeListId, menus: { [String(menuIndex)]: { recipeIds: arrayUnion(recipeId) } } },
           { merge: true }
         );
         // Recipe read access for other list members is granted by the
         // security rules checking live list membership via this pointer —
         // no need to keep a separate list of shared uids in sync.
-        updateDoc(doc(db, 'recipes', recipeId), {
-          queuedOnListId: alreadyQueued ? null : activeListId,
+        if (!recipeInAnyMenu(listDoc.menus, recipeId)) {
+          updateDoc(doc(db, 'recipes', recipeId), { queuedOnListId: activeListId });
+        }
+      },
+      removeRecipeFromMenu: (recipeId, menuIndex) => {
+        if (!listRef) return;
+        setDoc(
+          listRef,
+          { menus: { [String(menuIndex)]: { recipeIds: arrayRemove(recipeId) } } },
+          { merge: true }
+        );
+        if (!recipeInAnyMenu(listDoc.menus, recipeId, menuIndex)) {
+          updateDoc(doc(db, 'recipes', recipeId), { queuedOnListId: null });
+        }
+      },
+      addRecipeToNewMenu: (recipeId) => {
+        if (!listRef) return;
+        const nextIndex = listDoc.menus.length;
+        setDoc(
+          listRef,
+          { ownerId: activeListId, menus: { [String(nextIndex)]: { recipeIds: [recipeId] } } },
+          { merge: true }
+        );
+        if (!recipeInAnyMenu(listDoc.menus, recipeId)) {
+          updateDoc(doc(db, 'recipes', recipeId), { queuedOnListId: activeListId });
+        }
+      },
+      addNewMenu: () => {
+        if (!listRef) return;
+        const nextIndex = listDoc.menus.length;
+        setDoc(
+          listRef,
+          { ownerId: activeListId, menus: { [String(nextIndex)]: { recipeIds: [] } } },
+          { merge: true }
+        );
+      },
+      startNextMenu: () => {
+        if (!listRef || listDoc.menus.length === 0) return;
+        const shifted = listDoc.menus.slice(1);
+        const nextMenus = shifted.length > 0 ? shifted : [{ recipeIds: [] }];
+        const menusMap: Record<string, Menu> = {};
+        nextMenus.forEach((m, i) => {
+          menusMap[String(i)] = stripUndefinedMenuFields(m);
         });
+        // A plain (non-dotted) field assignment via updateDoc replaces the
+        // whole `menus` map wholesale, which is what drops the old trailing
+        // menu — setDoc(merge:true) would deep-merge instead and leave it.
+        updateDoc(listRef, { menus: menusMap });
+      },
+      deleteMenu: (menuIndex) => {
+        if (!listRef) return;
+        const menuToDelete = listDoc.menus[menuIndex];
+        if (!menuToDelete) return;
+
+        const remaining = listDoc.menus.filter((_, i) => i !== menuIndex);
+        const nextMenus = remaining.length > 0 ? remaining : [{ recipeIds: [] }];
+        const menusMap: Record<string, Menu> = {};
+        nextMenus.forEach((m, i) => {
+          menusMap[String(i)] = stripUndefinedMenuFields(m);
+        });
+        updateDoc(listRef, { menus: menusMap });
+
+        // Any recipe that was only queued on the menu being deleted is no
+        // longer queued anywhere — clear its read-access pointer.
+        menuToDelete.recipeIds.forEach((recipeId) => {
+          if (!recipeInAnyMenu(listDoc.menus, recipeId, menuIndex)) {
+            updateDoc(doc(db, 'recipes', recipeId), { queuedOnListId: null });
+          }
+        });
+      },
+      setMenuDates: (menuIndex, startDate, endDate) => {
+        if (!listRef) return;
+        // setDoc(merge) both creates the list doc if this is its very first
+        // write (e.g. dates set on the default-rendered menu 1 before
+        // anything's ever been queued) and deep-merges the nested `menus`
+        // map, so this can't clobber that menu's recipeIds or any other menu.
+        setDoc(
+          listRef,
+          {
+            ownerId: activeListId,
+            menus: {
+              [String(menuIndex)]: {
+                startDate: startDate ?? deleteField(),
+                endDate: endDate ?? deleteField(),
+              },
+            },
+          },
+          { merge: true }
+        );
+      },
+      setMenuName: (menuIndex, name) => {
+        if (!listRef) return;
+        const trimmed = name?.trim();
+        setDoc(
+          listRef,
+          {
+            ownerId: activeListId,
+            menus: {
+              [String(menuIndex)]: {
+                name: trimmed || deleteField(),
+              },
+            },
+          },
+          { merge: true }
+        );
       },
 
       groceryItems,
@@ -319,7 +508,7 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
         const listRef = doc(db, 'groceryLists', myUid);
         const listSnap = await getDoc(listRef);
         if (!listSnap.exists()) {
-          await setDoc(listRef, { ownerId: myUid, collaboratorIds: [], queuedRecipeIds: [] });
+          await setDoc(listRef, { ownerId: myUid, collaboratorIds: [] });
         }
         await addDoc(collection(db, 'groceryListInvites'), {
           listOwnerId: myUid,

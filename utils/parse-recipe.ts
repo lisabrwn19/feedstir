@@ -34,7 +34,11 @@ export async function fetchAndParseRecipe(url: string): Promise<ParseResult | nu
 }
 
 export function parseRecipeFromHtml(html: string): ParseResult | null {
-  const scriptRegex = /<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  // The `type` attribute value isn't always quoted (e.g. Love and Lemons'
+  // Yoast-generated `<script type=application/ld+json class=...>` tag), so
+  // match either a quoted or a bare unquoted value.
+  const scriptRegex =
+    /<script[^>]*type=["']?application\/ld\+json["']?[^>]*>([\s\S]*?)<\/script>/gi;
   let match: RegExpExecArray | null;
 
   while ((match = scriptRegex.exec(html))) {

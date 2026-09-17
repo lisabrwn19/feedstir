@@ -1,24 +1,12 @@
-import { Image } from 'expo-image';
-import { useRouter } from 'expo-router';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Modal,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  TextInput,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useGrocery } from '@/context/grocery-context';
-import { useRecipeDoc } from '@/context/recipes-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { db } from '@/lib/firebase';
 import type { GroceryItem } from '@/types/grocery';
@@ -27,38 +15,14 @@ import { categorizeIngredient, GROCERY_SECTIONS } from '@/utils/grocery-sections
 function useUserEmail(uid: string | undefined) {
   const [email, setEmail] = useState<string | undefined>();
   useEffect(() => {
-    if (!uid) {
-      setEmail(undefined);
-      return;
-    }
+    if (!uid) return;
     return onSnapshot(doc(db, 'users', uid), (snapshot) => setEmail(snapshot.data()?.email));
   }, [uid]);
-  return email;
-}
-
-function QueuedRecipeCard({ recipeId }: { recipeId: string }) {
-  const router = useRouter();
-  const border = useThemeColor({}, 'icon');
-  const recipe = useRecipeDoc(recipeId);
-
-  if (!recipe) return null;
-
-  return (
-    <Pressable
-      onPress={() => router.push({ pathname: '/recipe/[id]', params: { id: recipe.id } })}
-      style={[styles.queuedCard, { borderColor: border }]}>
-      {recipe.photoUri ? (
-        <Image source={{ uri: recipe.photoUri }} style={styles.queuedThumbnail} />
-      ) : (
-        <View style={[styles.queuedThumbnail, styles.queuedThumbnailPlaceholder, { borderColor: border }]}>
-          <IconSymbol name="fork.knife" size={20} color={border} />
-        </View>
-      )}
-      <ThemedText style={styles.queuedTitle} numberOfLines={2}>
-        {recipe.title}
-      </ThemedText>
-    </Pressable>
-  );
+  // Force undefined when uid drops rather than resetting `email` state
+  // directly in the effect — avoids a stale value flashing before the next
+  // effect run, and a synchronous setState call outside a subscription
+  // callback.
+  return uid ? email : undefined;
 }
 
 function CollaboratorRow({ uid }: { uid: string }) {
@@ -227,7 +191,6 @@ function GroceryItemPreview({ item, onClose }: { item: GroceryItem | null; onClo
 
 export default function GroceryScreen() {
   const {
-    queuedRecipeIds,
     groceryItems,
     toggleGroceryItemChecked,
     removeGroceryItem,
@@ -263,26 +226,6 @@ export default function GroceryScreen() {
 
       <ScrollView contentContainerStyle={styles.content}>
         <InviteBanner />
-
-        <View style={styles.section}>
-          <ThemedText type="subtitle">Upcoming Menu</ThemedText>
-          {queuedRecipeIds.length === 0 ? (
-            <ThemedText style={styles.emptyHint}>
-              Open a recipe and tap &quot;Add to Upcoming Menu&quot; to queue it here.
-            </ThemedText>
-          ) : (
-            <>
-              <View style={styles.queuedList}>
-                {queuedRecipeIds.map((recipeId) => (
-                  <QueuedRecipeCard key={recipeId} recipeId={recipeId} />
-                ))}
-              </View>
-              <ThemedText style={styles.sectionHint}>
-                Open a recipe to remove it from your Upcoming Menu.
-              </ThemedText>
-            </>
-          )}
-        </View>
 
         <View style={styles.section}>
           <View style={styles.listHeaderRow}>
@@ -404,36 +347,6 @@ const styles = StyleSheet.create({
   },
   emptyHint: {
     opacity: 0.6,
-  },
-  sectionHint: {
-    fontSize: 13,
-    opacity: 0.6,
-  },
-  queuedList: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-  },
-  queuedCard: {
-    width: 140,
-    padding: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: 12,
-    gap: 8,
-  },
-  queuedThumbnail: {
-    width: '100%',
-    height: 80,
-    borderRadius: 8,
-  },
-  queuedThumbnailPlaceholder: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-  },
-  queuedTitle: {
-    fontSize: 14,
-    fontWeight: '600',
   },
   sectionGroup: {
     gap: 2,

@@ -1,6 +1,6 @@
 import { Image } from 'expo-image';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -23,6 +23,9 @@ import { useGrocery } from '@/context/grocery-context';
 import { useRecipeDoc, useRecipes } from '@/context/recipes-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import type { Recipe } from '@/types/recipe';
+import type { Menu } from '@/types/grocery';
+import { formatDateRangeLabel } from '@/utils/calendar';
+import { menuLabel } from '@/utils/menu-labels';
 
 // Matches the `accent` theme color (#0a7ea4), which is fixed across light/dark.
 const accentSoft = 'rgba(10, 126, 164, 0.12)';
@@ -126,40 +129,55 @@ function DifficultyPicker({
 
 const CELEBRATION_EMOJI = ['🎉', '🍕', '🍰', '🎊', '🍜', '🥳', '🍩', '🍩'];
 
+type ConfettiParticle = {
+  emoji: string;
+  left: number;
+  delay: number;
+  duration: number;
+  spin: string;
+  anim: Animated.Value;
+};
+
 function ConfettiBurst() {
   const { height } = useWindowDimensions();
-  const particles = useMemo(
-    () =>
-      Array.from({ length: 28 }, (_, i) => ({
-        emoji: CELEBRATION_EMOJI[i % CELEBRATION_EMOJI.length],
-        left: Math.round(Math.random() * 96),
-        delay: Math.round(Math.random() * 500),
-        duration: 1800 + Math.round(Math.random() * 1000),
-        spin: Math.random() > 0.5 ? '360deg' : '-360deg',
-      })),
-    []
+  // A lazy useState initializer is the sanctioned way to compute a stable
+  // random value once on mount — unlike a useMemo factory or the render
+  // body itself, it's exempt from the "no impure calls during render" rule.
+  const [particles] = useState<ConfettiParticle[]>(() =>
+    Array.from({ length: 28 }, (_, i) => ({
+      emoji: CELEBRATION_EMOJI[i % CELEBRATION_EMOJI.length],
+      left: Math.round(Math.random() * 96),
+      delay: Math.round(Math.random() * 500),
+      duration: 1800 + Math.round(Math.random() * 1000),
+      spin: Math.random() > 0.5 ? '360deg' : '-360deg',
+      anim: new Animated.Value(0),
+    }))
   );
-  const anims = useRef(particles.map(() => new Animated.Value(0))).current;
 
+  // Starting the animation is an imperative side effect on an external
+  // system (the Animated engine), not a setState call — belongs in an
+  // effect per the react-hooks/set-state-in-effect rule's own guidance.
   useEffect(() => {
-    const animations = anims.map((value, i) =>
-      Animated.timing(value, {
-        toValue: 1,
-        duration: particles[i].duration,
-        delay: particles[i].delay,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: false,
-      })
-    );
-    Animated.stagger(0, animations).start();
-  }, [anims, particles]);
+    Animated.stagger(
+      0,
+      particles.map((p) =>
+        Animated.timing(p.anim, {
+          toValue: 1,
+          duration: p.duration,
+          delay: p.delay,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: false,
+        })
+      )
+    ).start();
+  }, [particles]);
 
   return (
     <View style={styles.confettiContainer} pointerEvents="none">
       {particles.map((p, i) => {
-        const translateY = anims[i].interpolate({ inputRange: [0, 1], outputRange: [-40, height] });
-        const opacity = anims[i].interpolate({ inputRange: [0, 0.85, 1], outputRange: [1, 1, 0] });
-        const rotate = anims[i].interpolate({ inputRange: [0, 1], outputRange: ['0deg', p.spin] });
+        const translateY = p.anim.interpolate({ inputRange: [0, 1], outputRange: [-40, height] });
+        const opacity = p.anim.interpolate({ inputRange: [0, 0.85, 1], outputRange: [1, 1, 0] });
+        const rotate = p.anim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', p.spin] });
         return (
           <Animated.Text
             key={i}
@@ -182,7 +200,7 @@ function CompleteOverlay({
 }: {
   visible: boolean;
   onClose: () => void;
-  onComplete: (rating: number, difficulty: NonNullable<Recipe['difficulty']>) => void;
+  onComplete: (rating: number | undefined, difficulty: NonNullable<Recipe['difficulty']>) => void;
 }) {
   const [step, setStep] = useState<'rating' | 'difficulty' | 'celebration'>('rating');
   const [draftRating, setDraftRating] = useState<number | undefined>();
@@ -197,7 +215,7 @@ function CompleteOverlay({
   };
 
   const handleDone = () => {
-    if (draftRating === undefined || !draftDifficulty) return;
+    if (!draftDifficulty) return;
     onComplete(draftRating, draftDifficulty);
     reset();
   };
@@ -214,8 +232,13 @@ function CompleteOverlay({
   };
 
   const handleShowCelebration = () => {
-    if (draftRating === undefined || !draftDifficulty) return;
+    if (!draftDifficulty) return;
     setStep('celebration');
+  };
+
+  const handleSkipRating = () => {
+    setDraftRating(undefined);
+    setStep('difficulty');
   };
 
   return (
@@ -232,15 +255,21 @@ function CompleteOverlay({
                 How would you rate it?
               </ThemedText>
               <RatingStars rating={draftRating} onChange={setDraftRating} />
-              <Pressable
-                onPress={() => setStep('difficulty')}
-                disabled={draftRating === undefined}
-                style={[
-                  styles.overlayPrimaryButton,
-                  { backgroundColor: accent, opacity: draftRating === undefined ? 0.5 : 1 },
-                ]}>
-                <ThemedText style={styles.overlayPrimaryButtonText}>Next</ThemedText>
-              </Pressable>
+              <View style={styles.overlayButtonRow}>
+                <Pressable onPress={handleSkipRating} style={styles.overlaySecondaryButton}>
+                  <ThemedText style={{ color: accent }}>Skip</ThemedText>
+                </Pressable>
+                <Pressable
+                  onPress={() => setStep('difficulty')}
+                  disabled={draftRating === undefined}
+                  style={[
+                    styles.overlayPrimaryButton,
+                    styles.overlayFinishButton,
+                    { backgroundColor: accent, opacity: draftRating === undefined ? 0.5 : 1 },
+                  ]}>
+                  <ThemedText style={styles.overlayPrimaryButtonText}>Next</ThemedText>
+                </Pressable>
+              </View>
             </>
           ) : step === 'difficulty' ? (
             <>
@@ -325,6 +354,95 @@ function ModificationRow({
   );
 }
 
+function AddToMenuModal({
+  visible,
+  onClose,
+  menus,
+  queuedMenuIndexes,
+  onToggleMenu,
+  onAddNewMenu,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  menus: Menu[];
+  queuedMenuIndexes: number[];
+  onToggleMenu: (menuIndex: number) => void;
+  onAddNewMenu: () => void;
+}) {
+  const accent = useThemeColor({}, 'accent');
+  const border = useThemeColor({}, 'icon');
+
+  // Always show at least "Menu 1", even before anything's ever been queued
+  // on this list.
+  const rowCount = Math.max(menus.length, 1);
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.overlayBackdrop}>
+        <ThemedView style={[styles.overlayCard, { borderColor: border }]}>
+          <Pressable
+            onPress={onClose}
+            hitSlop={8}
+            accessibilityLabel="Close"
+            style={styles.overlayCloseButton}>
+            <IconSymbol name="xmark" size={18} color={border} />
+          </Pressable>
+
+          <ThemedText type="subtitle" style={styles.overlayTitle}>
+            Add to Menu
+          </ThemedText>
+
+          <View style={styles.menuPickerList}>
+            {Array.from({ length: rowCount }, (_, menuIndex) => {
+              const queuedHere = queuedMenuIndexes.includes(menuIndex);
+              const dateLabel = formatDateRangeLabel(
+                menus[menuIndex]?.startDate,
+                menus[menuIndex]?.endDate
+              );
+              // Once queued for the menu you're cooking from (index 0),
+              // that row stops being directly toggleable — removal only
+              // happens via the overflow menu on the recipe screen, so
+              // there's no way to skip its keep/remove-items confirmation.
+              const disabled = menuIndex === 0 && queuedHere;
+              return (
+                <Pressable
+                  key={menuIndex}
+                  onPress={() => !disabled && onToggleMenu(menuIndex)}
+                  disabled={disabled}
+                  style={styles.menuPickerRow}>
+                  <IconSymbol
+                    name={queuedHere ? 'checkmark.circle.fill' : 'circle'}
+                    size={22}
+                    color={queuedHere ? accent : border}
+                  />
+                  <View style={styles.menuPickerRowText}>
+                    <ThemedText style={queuedHere ? { color: accent, fontWeight: '600' } : undefined}>
+                      {menuLabel(menuIndex)}
+                    </ThemedText>
+                    {dateLabel ? (
+                      <ThemedText style={[styles.menuPickerDate, { color: border }]}>
+                        {dateLabel}
+                      </ThemedText>
+                    ) : null}
+                  </View>
+                </Pressable>
+              );
+            })}
+            <Pressable onPress={onAddNewMenu} style={styles.menuPickerRow}>
+              <IconSymbol name="plus.circle" size={22} color={accent} />
+              <ThemedText style={{ color: accent, fontWeight: '600' }}>New Menu</ThemedText>
+            </Pressable>
+          </View>
+
+          <Pressable onPress={onClose} style={[styles.overlayPrimaryButton, { backgroundColor: accent }]}>
+            <ThemedText style={styles.overlayPrimaryButtonText}>Done</ThemedText>
+          </Pressable>
+        </ThemedView>
+      </View>
+    </Modal>
+  );
+}
+
 export default function RecipeDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -337,8 +455,17 @@ export default function RecipeDetailScreen() {
     addRecipeModification,
     removeRecipeModification,
   } = useRecipes();
-  const { isQueued, toggleQueued, isIngredientAdded, toggleGroceryIngredient, removeItemsForRecipe } =
-    useGrocery();
+  const {
+    menus,
+    isQueuedInMenu,
+    menusContainingRecipe,
+    addRecipeToMenu,
+    removeRecipeFromMenu,
+    addRecipeToNewMenu,
+    isIngredientAdded,
+    toggleGroceryIngredient,
+    removeItemsForRecipe,
+  } = useGrocery();
   const border = useThemeColor({}, 'icon');
   const accent = useThemeColor({}, 'accent');
   const placeholder = useThemeColor({}, 'icon');
@@ -346,6 +473,7 @@ export default function RecipeDetailScreen() {
   const recipe = useRecipeDoc(id);
   const [newModification, setNewModification] = useState('');
   const [showCompleteOverlay, setShowCompleteOverlay] = useState(false);
+  const [showMenuPicker, setShowMenuPicker] = useState(false);
 
   if (recipe === undefined) {
     return (
@@ -364,25 +492,34 @@ export default function RecipeDetailScreen() {
   }
 
   const isOwner = recipe.ownerId === user?.uid;
-  const queued = isQueued(recipe.id);
+  const queuedMenuIndexes = menusContainingRecipe(recipe.id);
+  const queuedInCurrentMenu = isQueuedInMenu(recipe.id, 0);
   const rating = recipe.rating;
 
-  const handleAddToWeek = () => {
-    toggleQueued(recipe.id);
+  const handleToggleMenu = (menuIndex: number) => {
+    if (isQueuedInMenu(recipe.id, menuIndex)) {
+      removeRecipeFromMenu(recipe.id, menuIndex);
+    } else {
+      addRecipeToMenu(recipe.id, menuIndex);
+    }
   };
 
-  const handleRemoveFromWeek = () => {
+  const handleAddToNewMenu = () => {
+    addRecipeToNewMenu(recipe.id);
+  };
+
+  const handleRemoveFromCurrentMenu = () => {
     Alert.alert(
-      'Remove from Upcoming Menu?',
+      'Remove from this menu?',
       'Keep the ingredients you already added to your grocery list, or remove them too?',
       [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Keep items', onPress: () => toggleQueued(recipe.id) },
+        { text: 'Keep items', onPress: () => removeRecipeFromMenu(recipe.id, 0) },
         {
           text: 'Remove items',
           style: 'destructive',
           onPress: () => {
-            toggleQueued(recipe.id);
+            removeRecipeFromMenu(recipe.id, 0);
             removeItemsForRecipe(recipe.id);
           },
         },
@@ -390,11 +527,14 @@ export default function RecipeDetailScreen() {
     );
   };
 
-  const handleComplete = (rating: number, difficulty: NonNullable<Recipe['difficulty']>) => {
-    setRecipeRating(recipe.id, rating);
+  const handleComplete = (
+    rating: number | undefined,
+    difficulty: NonNullable<Recipe['difficulty']>
+  ) => {
+    if (rating !== undefined) setRecipeRating(recipe.id, rating);
     setRecipeDifficulty(recipe.id, difficulty);
     markRecipeMade(recipe.id);
-    toggleQueued(recipe.id);
+    removeRecipeFromMenu(recipe.id, 0);
     setShowCompleteOverlay(false);
   };
 
@@ -409,8 +549,8 @@ export default function RecipeDetailScreen() {
         text: 'Delete',
         style: 'destructive',
         onPress: async () => {
-          if (queued) {
-            toggleQueued(recipe.id);
+          if (queuedMenuIndexes.length > 0) {
+            queuedMenuIndexes.forEach((menuIndex) => removeRecipeFromMenu(recipe.id, menuIndex));
             removeItemsForRecipe(recipe.id);
           }
           await deleteRecipe(recipe.id);
@@ -463,32 +603,40 @@ export default function RecipeDetailScreen() {
       {isOwner ? (
         <>
           <View style={styles.actionRow}>
-            {queued ? (
-              <>
-                <Pressable
-                  onPress={() => setShowCompleteOverlay(true)}
-                  style={[styles.actionButton, { backgroundColor: accent }]}>
-                  <IconSymbol name="checkmark.circle.fill" size={18} color="#fff" />
-                  <ThemedText style={[styles.actionButtonText, { color: '#fff' }]}>Complete</ThemedText>
-                </Pressable>
-                <Pressable
-                  onPress={handleRemoveFromWeek}
-                  hitSlop={8}
-                  style={[styles.overflowButton, { borderColor: border }]}>
-                  <IconSymbol name="ellipsis" size={18} color={border} />
-                </Pressable>
-              </>
-            ) : (
-              <Pressable
-                onPress={handleAddToWeek}
-                style={[styles.actionButton, { borderColor: accent }]}>
-                <IconSymbol name="circle" size={18} color={accent} />
-                <ThemedText style={[styles.actionButtonText, { color: accent }]}>
-                  Add to Upcoming Menu
-                </ThemedText>
-              </Pressable>
-            )}
+            <Pressable
+              onPress={() => setShowMenuPicker(true)}
+              style={[styles.actionButton, { borderColor: accent }]}>
+              <IconSymbol
+                name={queuedMenuIndexes.length > 0 ? 'checkmark.circle.fill' : 'plus.circle'}
+                size={18}
+                color={accent}
+              />
+              <ThemedText style={[styles.actionButtonText, { color: accent }]}>
+                {queuedMenuIndexes.length === 0
+                  ? 'Add to Menu'
+                  : queuedMenuIndexes.length === 1
+                    ? `In ${menuLabel(queuedMenuIndexes[0])}`
+                    : `In ${queuedMenuIndexes.length} Menus`}
+              </ThemedText>
+            </Pressable>
           </View>
+
+          {queuedInCurrentMenu ? (
+            <View style={styles.actionRow}>
+              <Pressable
+                onPress={() => setShowCompleteOverlay(true)}
+                style={[styles.actionButton, { backgroundColor: accent }]}>
+                <IconSymbol name="checkmark.circle.fill" size={18} color="#fff" />
+                <ThemedText style={[styles.actionButtonText, { color: '#fff' }]}>Complete</ThemedText>
+              </Pressable>
+              <Pressable
+                onPress={handleRemoveFromCurrentMenu}
+                hitSlop={8}
+                style={[styles.overflowButton, { borderColor: border }]}>
+                <IconSymbol name="ellipsis" size={18} color={border} />
+              </Pressable>
+            </View>
+          ) : null}
 
           {rating !== undefined || recipe.difficulty || recipe.timesMade > 0 ? (
             <View style={styles.summaryRow}>
@@ -613,6 +761,14 @@ export default function RecipeDetailScreen() {
         onClose={() => setShowCompleteOverlay(false)}
         onComplete={handleComplete}
       />
+      <AddToMenuModal
+        visible={showMenuPicker}
+        onClose={() => setShowMenuPicker(false)}
+        menus={menus}
+        queuedMenuIndexes={queuedMenuIndexes}
+        onToggleMenu={handleToggleMenu}
+        onAddNewMenu={handleAddToNewMenu}
+      />
     </>
   );
 }
@@ -653,6 +809,22 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 10,
+  },
+  menuPickerList: {
+    gap: 4,
+  },
+  menuPickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+  },
+  menuPickerRowText: {
+    flex: 1,
+  },
+  menuPickerDate: {
+    fontSize: 12,
+    marginTop: 1,
   },
   actionButton: {
     flexDirection: 'row',
@@ -858,7 +1030,7 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   confettiContainer: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     zIndex: 10,
   },
   confettiEmoji: {

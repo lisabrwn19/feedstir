@@ -1,7 +1,7 @@
 import * as ImagePicker from 'expo-image-picker';
 import { Image } from 'expo-image';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { ActivityIndicator, Alert, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import Animated, { useAnimatedKeyboard, useAnimatedStyle } from 'react-native-reanimated';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -12,6 +12,7 @@ import { ThemedView } from '@/components/themed-view';
 import { useAuth } from '@/context/auth-context';
 import { useRecipeDoc, useRecipes } from '@/context/recipes-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import type { Recipe } from '@/types/recipe';
 import { fetchAndParseRecipe } from '@/utils/parse-recipe';
 import { isLocalPhotoUri, uploadRecipePhoto } from '@/utils/upload-photo';
 
@@ -85,12 +86,51 @@ function ListEditor({
 }
 
 export default function NewRecipeScreen() {
-  const router = useRouter();
   const { id } = useLocalSearchParams<{ id?: string }>();
   const isEditing = !!id;
   const { user } = useAuth();
-  const { addRecipe, updateRecipe } = useRecipes();
   const existingRecipe = useRecipeDoc(id);
+
+  if (isEditing && existingRecipe === undefined) {
+    return (
+      <ThemedView style={styles.centered}>
+        <ThemedText>Loading…</ThemedText>
+      </ThemedView>
+    );
+  }
+  if (isEditing && (existingRecipe === null || existingRecipe?.ownerId !== user?.uid)) {
+    return (
+      <ThemedView style={styles.centered}>
+        <ThemedText>Recipe not found.</ThemedText>
+      </ThemedView>
+    );
+  }
+
+  // Keyed by recipe id so editing a different recipe remounts the form with
+  // fresh initial state pulled directly from props, instead of needing an
+  // effect to re-sync form fields after the id changes.
+  return (
+    <RecipeForm
+      key={isEditing ? existingRecipe?.id : 'new'}
+      isEditing={isEditing}
+      id={id}
+      existingRecipe={isEditing ? (existingRecipe ?? undefined) : undefined}
+    />
+  );
+}
+
+function RecipeForm({
+  isEditing,
+  id,
+  existingRecipe,
+}: {
+  isEditing: boolean;
+  id: string | undefined;
+  existingRecipe: Recipe | undefined;
+}) {
+  const router = useRouter();
+  const { user } = useAuth();
+  const { addRecipe, updateRecipe } = useRecipes();
   const { text, border, placeholder } = useFieldColors();
   const background = useThemeColor({}, 'background');
   const accent = useThemeColor({}, 'accent');
@@ -100,31 +140,24 @@ export default function NewRecipeScreen() {
     transform: [{ translateY: -keyboard.height.value }],
   }));
 
-  const [title, setTitle] = useState('');
-  const [photoUri, setPhotoUri] = useState<string | undefined>();
-  const [servings, setServings] = useState('');
-  const [prepTime, setPrepTime] = useState('');
-  const [cookTime, setCookTime] = useState('');
-  const [sourceUrl, setSourceUrl] = useState('');
-  const [ingredients, setIngredients] = useState(['']);
-  const [instructions, setInstructions] = useState(['']);
-  const [loadedExistingId, setLoadedExistingId] = useState<string | undefined>();
-
-  // Pre-fill the form once the existing recipe loads. Keyed on the recipe's
-  // own id (not just `isEditing`) so it only runs once per recipe, not on
-  // every keystroke as the user edits the pre-filled fields.
-  useEffect(() => {
-    if (!existingRecipe || loadedExistingId === existingRecipe.id) return;
-    setTitle(existingRecipe.title);
-    setPhotoUri(existingRecipe.photoUri);
-    setServings(existingRecipe.servings ? String(existingRecipe.servings) : '');
-    setPrepTime(existingRecipe.prepTimeMinutes ? String(existingRecipe.prepTimeMinutes) : '');
-    setCookTime(existingRecipe.cookTimeMinutes ? String(existingRecipe.cookTimeMinutes) : '');
-    setSourceUrl(existingRecipe.sourceUrl ?? '');
-    setIngredients(existingRecipe.ingredients.length ? existingRecipe.ingredients : ['']);
-    setInstructions(existingRecipe.instructions.length ? existingRecipe.instructions : ['']);
-    setLoadedExistingId(existingRecipe.id);
-  }, [existingRecipe, loadedExistingId]);
+  const [title, setTitle] = useState(existingRecipe?.title ?? '');
+  const [photoUri, setPhotoUri] = useState<string | undefined>(existingRecipe?.photoUri);
+  const [servings, setServings] = useState(
+    existingRecipe?.servings ? String(existingRecipe.servings) : ''
+  );
+  const [prepTime, setPrepTime] = useState(
+    existingRecipe?.prepTimeMinutes ? String(existingRecipe.prepTimeMinutes) : ''
+  );
+  const [cookTime, setCookTime] = useState(
+    existingRecipe?.cookTimeMinutes ? String(existingRecipe.cookTimeMinutes) : ''
+  );
+  const [sourceUrl, setSourceUrl] = useState(existingRecipe?.sourceUrl ?? '');
+  const [ingredients, setIngredients] = useState(
+    existingRecipe?.ingredients.length ? existingRecipe.ingredients : ['']
+  );
+  const [instructions, setInstructions] = useState(
+    existingRecipe?.instructions.length ? existingRecipe.instructions : ['']
+  );
 
   const [importUrl, setImportUrl] = useState('');
   const [importing, setImporting] = useState(false);
@@ -245,21 +278,6 @@ export default function NewRecipeScreen() {
       setSaveStatus('idle');
     }
   };
-
-  if (isEditing && existingRecipe === undefined) {
-    return (
-      <ThemedView style={styles.centered}>
-        <ThemedText>Loading…</ThemedText>
-      </ThemedView>
-    );
-  }
-  if (isEditing && (existingRecipe === null || existingRecipe?.ownerId !== user?.uid)) {
-    return (
-      <ThemedView style={styles.centered}>
-        <ThemedText>Recipe not found.</ThemedText>
-      </ThemedView>
-    );
-  }
 
   return (
     <View style={styles.flex}>
