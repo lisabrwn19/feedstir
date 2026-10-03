@@ -10,5 +10,13 @@ service firebase.storage {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.uid == ownerId;
     }
+
+    // Profile photos, same shape as recipe photos — one folder per owner,
+    // read open to any signed-in user (profiles are visible to followers),
+    // write restricted to the profile's own owner.
+    match /profile-photos/{ownerId}/{fileName} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null && request.auth.uid == ownerId;
+    }
   }
 }

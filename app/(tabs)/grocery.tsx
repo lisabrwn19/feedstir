@@ -10,7 +10,7 @@ import { useGrocery } from '@/context/grocery-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import { db } from '@/lib/firebase';
 import type { GroceryItem } from '@/types/grocery';
-import { categorizeIngredient, GROCERY_SECTIONS } from '@/utils/grocery-sections';
+import { effectiveSection, GROCERY_SECTIONS } from '@/utils/grocery-sections';
 
 function useUserEmail(uid: string | undefined) {
   const [email, setEmail] = useState<string | undefined>();
@@ -147,25 +147,78 @@ function InviteBanner() {
   );
 }
 
-function GroceryItemPreview({ item, onClose }: { item: GroceryItem | null; onClose: () => void }) {
+function GroceryItemPreview({
+  item,
+  onClose,
+  onRename,
+}: {
+  item: GroceryItem | null;
+  onClose: () => void;
+  onRename: (newText: string) => void;
+}) {
   const border = useThemeColor({}, 'icon');
   const accent = useThemeColor({}, 'accent');
+  const text = useThemeColor({}, 'text');
+  const [editing, setEditing] = useState(false);
+  const [draftText, setDraftText] = useState('');
+
+  const startEditing = () => {
+    setDraftText(item?.text ?? '');
+    setEditing(true);
+  };
+
+  const handleSaveName = () => {
+    onRename(draftText);
+    setEditing(false);
+  };
+
+  const handleClose = () => {
+    setEditing(false);
+    onClose();
+  };
 
   return (
-    <Modal visible={item !== null} transparent animationType="fade" onRequestClose={onClose}>
+    <Modal
+      visible={item !== null}
+      transparent
+      animationType="fade"
+      onRequestClose={handleClose}>
       <View style={styles.previewBackdrop}>
         <ThemedView style={[styles.previewCard, { borderColor: border }]}>
           <Pressable
-            onPress={onClose}
+            onPress={handleClose}
             hitSlop={8}
             accessibilityLabel="Close"
             style={styles.previewCloseButton}>
             <IconSymbol name="xmark" size={18} color={border} />
           </Pressable>
 
-          <ThemedText type="subtitle" style={styles.previewTitle}>
-            {item?.text}
-          </ThemedText>
+          {editing ? (
+            <View style={styles.previewEditRow}>
+              <TextInput
+                value={draftText}
+                onChangeText={setDraftText}
+                autoFocus
+                returnKeyType="done"
+                onSubmitEditing={handleSaveName}
+                style={[styles.input, styles.previewEditInput, { color: text, borderColor: border }]}
+              />
+              <Pressable
+                onPress={handleSaveName}
+                hitSlop={8}
+                accessibilityLabel="Save name"
+                style={[styles.previewSaveButton, { backgroundColor: accent }]}>
+                <IconSymbol name="checkmark" size={18} color="#fff" />
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable onPress={startEditing} style={styles.previewTitleRow} accessibilityLabel="Edit name">
+              <ThemedText type="subtitle" style={styles.previewTitle}>
+                {item?.text}
+              </ThemedText>
+              <IconSymbol name="pencil" size={16} color={border} />
+            </Pressable>
+          )}
           <ThemedText style={[styles.previewSubtitle, { color: border }]}>
             How much you need, by recipe
           </ThemedText>
@@ -189,6 +242,181 @@ function GroceryItemPreview({ item, onClose }: { item: GroceryItem | null; onClo
   );
 }
 
+function SectionNameModal({
+  visible,
+  title,
+  initialName,
+  onClose,
+  onSave,
+}: {
+  visible: boolean;
+  title: string;
+  initialName: string;
+  onClose: () => void;
+  onSave: (name: string) => void;
+}) {
+  const border = useThemeColor({}, 'icon');
+  const text = useThemeColor({}, 'text');
+  const accent = useThemeColor({}, 'accent');
+  const [draftName, setDraftName] = useState(initialName);
+
+  const handleSave = () => {
+    if (!draftName.trim()) return;
+    onSave(draftName);
+    onClose();
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.previewBackdrop}>
+        {visible ? (
+          <ThemedView key={initialName} style={[styles.previewCard, { borderColor: border }]}>
+            <Pressable
+              onPress={onClose}
+              hitSlop={8}
+              accessibilityLabel="Close"
+              style={styles.previewCloseButton}>
+              <IconSymbol name="xmark" size={18} color={border} />
+            </Pressable>
+            <ThemedText type="subtitle" style={styles.previewTitle}>
+              {title}
+            </ThemedText>
+            <TextInput
+              value={draftName}
+              onChangeText={setDraftName}
+              placeholder="e.g. Costco"
+              placeholderTextColor={border}
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={handleSave}
+              style={[styles.input, { color: text, borderColor: border, marginTop: 12 }]}
+            />
+            <View style={styles.modalActions}>
+              <Pressable onPress={onClose} style={styles.modalSecondaryButton}>
+                <ThemedText style={{ color: accent }}>Cancel</ThemedText>
+              </Pressable>
+              <Pressable
+                onPress={handleSave}
+                disabled={!draftName.trim()}
+                style={[
+                  styles.modalPrimaryButton,
+                  { backgroundColor: accent, opacity: draftName.trim() ? 1 : 0.5 },
+                ]}>
+                <ThemedText style={styles.modalPrimaryButtonText}>Save</ThemedText>
+              </Pressable>
+            </View>
+          </ThemedView>
+        ) : null}
+      </View>
+    </Modal>
+  );
+}
+
+function DeleteSectionConfirm({
+  visible,
+  sectionName,
+  onCancel,
+  onConfirm,
+}: {
+  visible: boolean;
+  sectionName: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const border = useThemeColor({}, 'icon');
+  const accent = useThemeColor({}, 'accent');
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
+      <View style={styles.previewBackdrop}>
+        <ThemedView style={[styles.previewCard, { borderColor: border }]}>
+          <ThemedText type="subtitle" style={styles.previewTitle}>
+            Delete &quot;{sectionName}&quot;?
+          </ThemedText>
+          <ThemedText style={{ color: border, marginTop: 4 }}>
+            Items in this section move back to their automatic category. Nothing is removed from
+            your list.
+          </ThemedText>
+          <View style={styles.modalActions}>
+            <Pressable onPress={onCancel} style={styles.modalSecondaryButton}>
+              <ThemedText style={{ color: accent }}>Cancel</ThemedText>
+            </Pressable>
+            <Pressable
+              onPress={onConfirm}
+              style={[styles.modalPrimaryButton, { backgroundColor: '#d64545' }]}>
+              <ThemedText style={styles.modalPrimaryButtonText}>Delete</ThemedText>
+            </Pressable>
+          </View>
+        </ThemedView>
+      </View>
+    </Modal>
+  );
+}
+
+function MoveItemModal({
+  item,
+  sections,
+  onClose,
+  onSelect,
+}: {
+  item: GroceryItem | null;
+  sections: string[];
+  onClose: () => void;
+  onSelect: (section: string | undefined) => void;
+}) {
+  const border = useThemeColor({}, 'icon');
+  const accent = useThemeColor({}, 'accent');
+  const current = item ? effectiveSection(item.text, item.sectionOverride) : undefined;
+
+  return (
+    <Modal visible={item !== null} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.previewBackdrop}>
+        <ThemedView style={[styles.previewCard, { borderColor: border }]}>
+          <Pressable onPress={onClose} hitSlop={8} accessibilityLabel="Close" style={styles.previewCloseButton}>
+            <IconSymbol name="xmark" size={18} color={border} />
+          </Pressable>
+          <ThemedText type="subtitle" style={styles.previewTitle}>
+            Move &quot;{item?.text}&quot;
+          </ThemedText>
+          <View style={styles.movePickerList}>
+            {sections.map((section) => {
+              const selected = section === current;
+              return (
+                <Pressable
+                  key={section}
+                  onPress={() => {
+                    onSelect(section);
+                    onClose();
+                  }}
+                  style={styles.movePickerRow}>
+                  <IconSymbol
+                    name={selected ? 'checkmark.circle.fill' : 'circle'}
+                    size={20}
+                    color={selected ? accent : border}
+                  />
+                  <ThemedText style={selected ? { color: accent, fontWeight: '600' } : undefined}>
+                    {section}
+                  </ThemedText>
+                </Pressable>
+              );
+            })}
+          </View>
+          {item?.sectionOverride ? (
+            <Pressable
+              onPress={() => {
+                onSelect(undefined);
+                onClose();
+              }}
+              style={styles.moveResetButton}>
+              <ThemedText style={{ color: accent }}>Use automatic category</ThemedText>
+            </Pressable>
+          ) : null}
+        </ThemedView>
+      </View>
+    </Modal>
+  );
+}
+
 export default function GroceryScreen() {
   const {
     groceryItems,
@@ -196,6 +424,12 @@ export default function GroceryScreen() {
     removeGroceryItem,
     addManualItem,
     clearCheckedItems,
+    customSections,
+    addGrocerySection,
+    renameGrocerySection,
+    removeGrocerySection,
+    setGroceryItemSection,
+    updateGroceryItemText,
   } = useGrocery();
   const text = useThemeColor({}, 'text');
   const border = useThemeColor({}, 'icon');
@@ -203,6 +437,10 @@ export default function GroceryScreen() {
 
   const [manualItemText, setManualItemText] = useState('');
   const [previewItem, setPreviewItem] = useState<GroceryItem | null>(null);
+  const [moveItem, setMoveItem] = useState<GroceryItem | null>(null);
+  const [addingSection, setAddingSection] = useState(false);
+  const [renamingSection, setRenamingSection] = useState<string | null>(null);
+  const [deletingSection, setDeletingSection] = useState<string | null>(null);
 
   const handleAddManualItem = () => {
     if (!manualItemText.trim()) return;
@@ -210,20 +448,24 @@ export default function GroceryScreen() {
     setManualItemText('');
   };
 
+  const allSections = [...GROCERY_SECTIONS, ...customSections];
+  const groupedSections = allSections
+    .map((section) => {
+      const items = groceryItems.filter(
+        (item) => effectiveSection(item.text, item.sectionOverride) === section
+      );
+      const unchecked = items.filter((item) => !item.checked);
+      const checked = items.filter((item) => item.checked);
+      return { section, items: [...unchecked, ...checked], isCustom: customSections.includes(section) };
+    })
+    // Fixed default sections stay hidden while empty, same as before. Custom
+    // sections always show — otherwise a newly-added one with nothing moved
+    // into it yet would vanish, with no way to rename or delete it.
+    .filter((group) => group.items.length > 0 || group.isCustom);
   const checkedItems = groceryItems.filter((item) => item.checked);
-  const groupedSections = GROCERY_SECTIONS.map((section) => {
-    const items = groceryItems.filter((item) => categorizeIngredient(item.text) === section);
-    const unchecked = items.filter((item) => !item.checked);
-    const checked = items.filter((item) => item.checked);
-    return { section, items: [...unchecked, ...checked] };
-  }).filter((group) => group.items.length > 0);
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <ThemedView style={styles.header}>
-        <ThemedText type="title">Grocery</ThemedText>
-      </ThemedView>
-
       <ScrollView contentContainerStyle={styles.content}>
         <InviteBanner />
 
@@ -263,11 +505,34 @@ export default function GroceryScreen() {
               Tap ingredients on a recipe, or add an item above.
             </ThemedText>
           ) : (
-            groupedSections.map(({ section, items }) => (
+            groupedSections.map(({ section, items, isCustom }) => (
               <View key={section} style={styles.sectionGroup}>
-                <ThemedText style={[styles.sectionLabel, { color: border }]}>
-                  {section.toUpperCase()}
-                </ThemedText>
+                <View style={styles.sectionLabelRow}>
+                  <ThemedText style={[styles.sectionLabel, { color: border }]}>
+                    {section.toUpperCase()}
+                  </ThemedText>
+                  {isCustom ? (
+                    <View style={styles.sectionLabelActions}>
+                      <Pressable
+                        onPress={() => setRenamingSection(section)}
+                        hitSlop={8}
+                        accessibilityLabel={`Rename ${section} section`}>
+                        <IconSymbol name="pencil" size={14} color={border} />
+                      </Pressable>
+                      <Pressable
+                        onPress={() => setDeletingSection(section)}
+                        hitSlop={8}
+                        accessibilityLabel={`Delete ${section} section`}>
+                        <IconSymbol name="trash" size={14} color={border} />
+                      </Pressable>
+                    </View>
+                  ) : null}
+                </View>
+                {items.length === 0 ? (
+                  <ThemedText style={[styles.sectionEmptyHint, { color: border }]}>
+                    No items yet — move one here with the folder icon.
+                  </ThemedText>
+                ) : null}
                 {items.map((item) => {
                   const recipeTitles = Array.from(
                     new Set(
@@ -304,6 +569,12 @@ export default function GroceryScreen() {
                           </ThemedText>
                         ) : null}
                       </Pressable>
+                      <Pressable
+                        onPress={() => setMoveItem(item)}
+                        hitSlop={8}
+                        accessibilityLabel={`Move ${item.text} to another section`}>
+                        <IconSymbol name="folder" size={16} color={border} />
+                      </Pressable>
                       <Pressable onPress={() => removeGroceryItem(item.id)} hitSlop={8}>
                         <IconSymbol name="xmark" size={16} color={border} />
                       </Pressable>
@@ -313,12 +584,50 @@ export default function GroceryScreen() {
               </View>
             ))
           )}
+
+          <Pressable onPress={() => setAddingSection(true)} style={styles.addSectionButton}>
+            <IconSymbol name="plus" size={16} color={accent} />
+            <ThemedText style={{ color: accent }}>Add Section</ThemedText>
+          </Pressable>
         </View>
 
         <SharingSection />
       </ScrollView>
 
-      <GroceryItemPreview item={previewItem} onClose={() => setPreviewItem(null)} />
+      <GroceryItemPreview
+        item={previewItem}
+        onClose={() => setPreviewItem(null)}
+        onRename={(newText) => previewItem && updateGroceryItemText(previewItem.id, newText)}
+      />
+      <MoveItemModal
+        item={moveItem}
+        sections={allSections}
+        onClose={() => setMoveItem(null)}
+        onSelect={(section) => moveItem && setGroceryItemSection(moveItem.id, section)}
+      />
+      <SectionNameModal
+        visible={addingSection}
+        title="Add Section"
+        initialName=""
+        onClose={() => setAddingSection(false)}
+        onSave={addGrocerySection}
+      />
+      <SectionNameModal
+        visible={renamingSection !== null}
+        title={`Rename ${renamingSection ?? ''}`}
+        initialName={renamingSection ?? ''}
+        onClose={() => setRenamingSection(null)}
+        onSave={(newName) => renamingSection && renameGrocerySection(renamingSection, newName)}
+      />
+      <DeleteSectionConfirm
+        visible={deletingSection !== null}
+        sectionName={deletingSection ?? ''}
+        onCancel={() => setDeletingSection(null)}
+        onConfirm={() => {
+          if (deletingSection) removeGrocerySection(deletingSection);
+          setDeletingSection(null);
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -327,13 +636,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 16,
-  },
   content: {
     paddingHorizontal: 20,
+    paddingTop: 16,
     paddingBottom: 32,
     gap: 28,
   },
@@ -355,7 +660,27 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     letterSpacing: 0.5,
+  },
+  sectionLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     marginBottom: 4,
+  },
+  sectionLabelActions: {
+    flexDirection: 'row',
+    gap: 14,
+  },
+  sectionEmptyHint: {
+    fontSize: 13,
+    opacity: 0.6,
+    paddingVertical: 4,
+  },
+  addSectionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 10,
   },
   groceryRow: {
     flexDirection: 'row',
@@ -443,9 +768,32 @@ const styles = StyleSheet.create({
   previewTitle: {
     marginRight: 20,
   },
+  previewTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginRight: 20,
+  },
+  previewEditRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginRight: 20,
+  },
+  previewEditInput: {
+    flex: 1,
+  },
+  previewSaveButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   previewSubtitle: {
     fontSize: 13,
     marginBottom: 12,
+    marginTop: 4,
   },
   previewList: {
     gap: 14,
@@ -464,5 +812,39 @@ const styles = StyleSheet.create({
   },
   previewRecipe: {
     fontSize: 13,
+  },
+  modalActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 16,
+    marginTop: 16,
+  },
+  modalSecondaryButton: {
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+  },
+  modalPrimaryButton: {
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+  },
+  modalPrimaryButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+  movePickerList: {
+    gap: 2,
+    marginTop: 12,
+  },
+  movePickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 10,
+  },
+  moveResetButton: {
+    marginTop: 8,
+    alignItems: 'center',
+    paddingVertical: 8,
   },
 });

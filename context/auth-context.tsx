@@ -5,7 +5,7 @@ import {
   signOut as firebaseSignOut,
   type User,
 } from 'firebase/auth';
-import { doc, setDoc } from 'firebase/firestore';
+import { deleteField, doc, setDoc } from 'firebase/firestore';
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 
 import { auth, db } from '@/lib/firebase';
@@ -16,6 +16,7 @@ type AuthContextValue = {
   signUp: (email: string, password: string) => Promise<void>;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
+  updateProfile: (fields: { displayName?: string; photoUri?: string }) => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
@@ -47,6 +48,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await signInWithEmailAndPassword(auth, email, password);
     },
     signOut: () => firebaseSignOut(auth),
+    updateProfile: async (fields) => {
+      if (!user) throw new Error('Must be signed in to update your profile');
+      // Only touch keys actually passed in — e.g. updating just the display
+      // name must not also wipe an existing photo via an implicit `undefined`.
+      const update: Record<string, unknown> = {};
+      if ('displayName' in fields) {
+        update.displayName = fields.displayName?.trim() || deleteField();
+      }
+      if ('photoUri' in fields) {
+        update.photoUri = fields.photoUri || deleteField();
+      }
+      if (Object.keys(update).length === 0) return;
+      await setDoc(doc(db, 'users', user.uid), update, { merge: true });
+    },
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

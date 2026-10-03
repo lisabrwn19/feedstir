@@ -398,9 +398,6 @@ export default function MenusScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <ThemedView style={styles.header}>
-        <ThemedText type="title">Menus</ThemedText>
-      </ThemedView>
 
       <ScrollView contentContainerStyle={styles.content}>
         <View style={[styles.viewModeRow, { borderColor: border }]}>
@@ -487,13 +484,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  header: {
-    paddingHorizontal: 20,
-    paddingTop: 12,
-    paddingBottom: 16,
-  },
   content: {
     paddingHorizontal: 20,
+    paddingTop: 16,
     paddingBottom: 32,
     gap: 28,
   },

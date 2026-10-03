@@ -22,6 +22,7 @@ import { useAuth } from '@/context/auth-context';
 import { db } from '@/lib/firebase';
 import type { GroceryInvite, GroceryItem, GrocerySource, Menu } from '@/types/grocery';
 import { subscribeWithRetry } from '@/utils/firestore-retry';
+import { GROCERY_SECTIONS } from '@/utils/grocery-sections';
 import { displayIngredientName, normalizeIngredientKey } from '@/utils/parse-ingredient';
 
 type GroceryContextValue = {
@@ -51,6 +52,13 @@ type GroceryContextValue = {
   /** Sets or clears a menu's optional custom name. Pass undefined (or blank) to fall back to its positional label. */
   setMenuName: (menuIndex: number, name: string | undefined) => void;
 
+  /** User-added sections (e.g. "Costco"), beyond the fixed defaults in `GROCERY_SECTIONS`. */
+  customSections: string[];
+  addGrocerySection: (name: string) => void;
+  renameGrocerySection: (oldName: string, newName: string) => void;
+  /** Removing a section clears `sectionOverride` on any item that pointed at it, falling back to automatic categorization. */
+  removeGrocerySection: (name: string) => void;
+
   groceryItems: GroceryItem[];
   isIngredientAdded: (recipeId: string, text: string) => boolean;
   toggleGroceryIngredient: (recipeId: string, recipeTitle: string, text: string) => void;
@@ -59,6 +67,10 @@ type GroceryContextValue = {
   removeItemsForRecipe: (recipeId: string) => void;
   addManualItem: (text: string) => void;
   clearCheckedItems: () => void;
+  /** Pass undefined to clear the override and fall back to automatic categorization. */
+  setGroceryItemSection: (id: string, section: string | undefined) => void;
+  /** Renames an item's merged display name (what every source collapses into) — not a per-source edit. */
+  updateGroceryItemText: (id: string, newText: string) => void;
 
   inviteCollaborator: (email: string) => Promise<void>;
   pendingInvite: GroceryInvite | undefined;
@@ -113,6 +125,14 @@ function recipeInAnyMenu(menus: Menu[], recipeId: string, excludeIndex?: number)
   return menus.some((m, i) => i !== excludeIndex && m.recipeIds.includes(recipeId));
 }
 
+// Only the recipe's owner can write this field — expected to fail with
+// permission-denied when queuing a followed user's recipe onto your own
+// list, since you already have read access to it via the follow relationship,
+// not via this pointer. Swallowed rather than surfaced as an error.
+function trySetQueuedOnListId(recipeId: string, listId: string | null | undefined) {
+  updateDoc(doc(db, 'recipes', recipeId), { queuedOnListId: listId ?? null }).catch(() => {});
+}
+
 // Firestore rejects a literal `undefined` field value outright — parsed
 // Menu objects always carry name/startDate/endDate keys (set to undefined
 // when unset), so a wholesale re-write of one (e.g. shifting them during
@@ -145,9 +165,10 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
   // A user collaborates on at most one other list in this phase; if none,
   // they use their own.
   const [collaboratingListId, setCollaboratingListId] = useState<string | undefined>();
-  const [listDoc, setListDoc] = useState<{ collaboratorIds: string[]; menus: Menu[] }>({
+  const [listDoc, setListDoc] = useState<{ collaboratorIds: string[]; menus: Menu[]; sections: string[] }>({
     collaboratorIds: [],
     menus: [],
+    sections: [],
   });
   const [groceryItems, setGroceryItems] = useState<GroceryItem[]>([]);
   const [pendingInvite, setPendingInvite] = useState<GroceryInvite | undefined>();
@@ -173,7 +194,7 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
   // Listen to the active list's doc + items.
   useEffect(() => {
     if (!activeListId) {
-      setListDoc({ collaboratorIds: [], menus: [] });
+      setListDoc({ collaboratorIds: [], menus: [], sections: [] });
       setGroceryItems([]);
       setLoading(false);
       return;
@@ -215,6 +236,7 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
         setListDoc({
           collaboratorIds: data?.collaboratorIds ?? [],
           menus,
+          sections: Array.isArray(data?.sections) ? (data.sections as string[]) : [],
         });
         setLoading(false);
       },
@@ -233,6 +255,7 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
               checked: data.checked ?? false,
               sources: Array.isArray(data.sources) ? data.sources : [],
               addedBy: data.addedBy,
+              sectionOverride: data.sectionOverride ?? undefined,
             };
           })
         );
@@ -290,7 +313,7 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
         // security rules checking live list membership via this pointer —
         // no need to keep a separate list of shared uids in sync.
         if (!recipeInAnyMenu(listDoc.menus, recipeId)) {
-          updateDoc(doc(db, 'recipes', recipeId), { queuedOnListId: activeListId });
+          trySetQueuedOnListId(recipeId, activeListId);
         }
       },
       removeRecipeFromMenu: (recipeId, menuIndex) => {
@@ -301,7 +324,7 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
           { merge: true }
         );
         if (!recipeInAnyMenu(listDoc.menus, recipeId, menuIndex)) {
-          updateDoc(doc(db, 'recipes', recipeId), { queuedOnListId: null });
+          trySetQueuedOnListId(recipeId, null);
         }
       },
       addRecipeToNewMenu: (recipeId) => {
@@ -313,7 +336,7 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
           { merge: true }
         );
         if (!recipeInAnyMenu(listDoc.menus, recipeId)) {
-          updateDoc(doc(db, 'recipes', recipeId), { queuedOnListId: activeListId });
+          trySetQueuedOnListId(recipeId, activeListId);
         }
       },
       addNewMenu: () => {
@@ -355,7 +378,7 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
         // longer queued anywhere — clear its read-access pointer.
         menuToDelete.recipeIds.forEach((recipeId) => {
           if (!recipeInAnyMenu(listDoc.menus, recipeId, menuIndex)) {
-            updateDoc(doc(db, 'recipes', recipeId), { queuedOnListId: null });
+            trySetQueuedOnListId(recipeId, null);
           }
         });
       },
@@ -394,6 +417,53 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
           },
           { merge: true }
         );
+      },
+
+      customSections: listDoc.sections,
+      addGrocerySection: (name) => {
+        if (!listRef) return;
+        const trimmed = name.trim();
+        if (!trimmed) return;
+        const existing = [...GROCERY_SECTIONS, ...listDoc.sections].map((s) => s.toLowerCase());
+        if (existing.includes(trimmed.toLowerCase())) return;
+        setDoc(listRef, { ownerId: activeListId, sections: arrayUnion(trimmed) }, { merge: true });
+      },
+      renameGrocerySection: (oldName, newName) => {
+        if (!listRef || !activeListId) return;
+        const trimmed = newName.trim();
+        if (!trimmed || !listDoc.sections.includes(oldName)) return;
+        const nextSections = listDoc.sections.map((s) => (s === oldName ? trimmed : s));
+        updateDoc(listRef, { sections: nextSections });
+        groceryItems
+          .filter((item) => item.sectionOverride === oldName)
+          .forEach((item) => {
+            updateDoc(doc(db, 'groceryLists', activeListId, 'items', item.id), {
+              sectionOverride: trimmed,
+            });
+          });
+      },
+      removeGrocerySection: (name) => {
+        if (!listRef || !activeListId) return;
+        updateDoc(listRef, { sections: listDoc.sections.filter((s) => s !== name) });
+        groceryItems
+          .filter((item) => item.sectionOverride === name)
+          .forEach((item) => {
+            updateDoc(doc(db, 'groceryLists', activeListId, 'items', item.id), {
+              sectionOverride: deleteField(),
+            });
+          });
+      },
+      setGroceryItemSection: (id, section) => {
+        if (!activeListId) return;
+        updateDoc(doc(db, 'groceryLists', activeListId, 'items', id), {
+          sectionOverride: section ?? deleteField(),
+        });
+      },
+      updateGroceryItemText: (id, newText) => {
+        if (!activeListId) return;
+        const trimmed = displayIngredientName(newText);
+        if (!trimmed) return;
+        updateDoc(doc(db, 'groceryLists', activeListId, 'items', id), { text: trimmed });
       },
 
       groceryItems,

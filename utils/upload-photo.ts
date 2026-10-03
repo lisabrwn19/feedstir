@@ -2,12 +2,7 @@ import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 
 import { storage } from '@/lib/firebase';
 
-/**
- * Uploads a local photo (a `file://` URI from the image picker) to Firebase
- * Storage and returns its public download URL. Remote URLs (e.g. an image
- * pulled in via URL import) are already stable and don't need uploading.
- */
-export async function uploadRecipePhoto(localUri: string, ownerId: string): Promise<string> {
+async function uploadPhoto(folder: string, ownerId: string, localUri: string): Promise<string> {
   const response = await fetch(localUri);
   const blob = await response.blob();
 
@@ -17,10 +12,23 @@ export async function uploadRecipePhoto(localUri: string, ownerId: string): Prom
   const contentType = blob.type || 'image/jpeg';
   const extension = contentType.split('/').pop() || 'jpg';
   const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}.${extension}`;
-  const storageRef = ref(storage, `recipe-photos/${ownerId}/${fileName}`);
+  const storageRef = ref(storage, `${folder}/${ownerId}/${fileName}`);
 
   await uploadBytes(storageRef, blob, { contentType });
   return getDownloadURL(storageRef);
+}
+
+/**
+ * Uploads a local photo (a `file://` URI from the image picker) to Firebase
+ * Storage and returns its public download URL. Remote URLs (e.g. an image
+ * pulled in via URL import) are already stable and don't need uploading.
+ */
+export function uploadRecipePhoto(localUri: string, ownerId: string): Promise<string> {
+  return uploadPhoto('recipe-photos', ownerId, localUri);
+}
+
+export function uploadProfilePhoto(localUri: string, ownerId: string): Promise<string> {
+  return uploadPhoto('profile-photos', ownerId, localUri);
 }
 
 export function isLocalPhotoUri(uri: string): boolean {

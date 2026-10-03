@@ -12,26 +12,52 @@ service cloud.firestore {
           get(/databases/$(database)/documents/groceryLists/$(listId)).data.get('collaboratorIds', []);
     }
 
-    // Minimal profile doc (email), used to resolve grocery-list invites and
-    // to show a collaborator's email in the UI.
+    // True if I follow `followedId`. `follows` docs are keyed
+    // `{followerId}_{followedId}`, so this is a single-doc existence check
+    // rather than a query.
+    function isFollowing(followedId) {
+      return exists(
+        /databases/$(database)/documents/follows/$(request.auth.uid + '_' + followedId)
+      );
+    }
+
+    // Profile doc (email, display name, photo). Used to resolve grocery-list
+    // invites, show a collaborator's email, and show follow-target profiles.
     match /users/{uid} {
       allow read: if request.auth != null;
       allow write: if request.auth != null && request.auth.uid == uid;
     }
 
-    // A recipe is readable by its owner, or — if it's currently queued onto
-    // a grocery list (queuedOnListId) — by any current member of that list,
-    // checked live. Only the owner can ever write to it.
+    // A recipe is readable by its owner, by any current member of a grocery
+    // list it's queued onto (queuedOnListId, checked live), or by anyone
+    // who follows the owner (an open follow makes someone's whole recipe
+    // library visible, not just what they've made). Only the owner can
+    // ever write to it.
     match /recipes/{recipeId} {
       allow read: if request.auth != null && (
         request.auth.uid == resource.data.ownerId ||
         (
           resource.data.get('queuedOnListId', null) != null &&
           isGroceryListMember(resource.data.queuedOnListId)
-        )
+        ) ||
+        isFollowing(resource.data.ownerId)
       );
       allow create: if request.auth != null && request.auth.uid == request.resource.data.ownerId;
       allow update, delete: if request.auth != null && request.auth.uid == resource.data.ownerId;
+    }
+
+    // Following is open (no approval) — anyone can create a follow doc as
+    // themselves, targeting anyone but themselves, and remove their own.
+    // Follow relationships aren't sensitive, so any signed-in user can read
+    // them (needed for follower/following lists and counts).
+    match /follows/{followId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null &&
+        request.auth.uid == request.resource.data.followerId &&
+        request.resource.data.followedId != request.auth.uid &&
+        followId == (request.auth.uid + '_' + request.resource.data.followedId);
+      allow update: if false;
+      allow delete: if request.auth != null && request.auth.uid == resource.data.followerId;
     }
 
     // One grocery list per user, keyed by the owner's uid. Readable/writable
@@ -64,6 +90,45 @@ service cloud.firestore {
       match /items/{itemId} {
         allow read, write: if request.auth != null && isGroceryListMember(listId);
       }
+    }
+
+    // A recipe I've favorited — works for any recipe I can currently read
+    // (mine, or a followed user's), not just my own. Docs are keyed
+    // `{uid}_{recipeId}` and private to their owner; nobody else needs to
+    // see what someone else has favorited.
+    match /favorites/{favoriteId} {
+      allow read: if request.auth != null && request.auth.uid == resource.data.uid;
+      allow create: if request.auth != null &&
+        request.auth.uid == request.resource.data.uid &&
+        favoriteId == (request.auth.uid + '_' + request.resource.data.recipeId);
+      allow update: if false;
+      allow delete: if request.auth != null && request.auth.uid == resource.data.uid;
+    }
+
+    // My personal folder tags + rating on a recipe I don't own — works for
+    // any recipe I can currently read (mine, or a followed user's). Docs
+    // are keyed `{uid}_{recipeId}` and private to their owner. Own recipes
+    // use `recipes/{id}.categories`/`.rating` directly instead (I can
+    // already write that doc); this exists only for recipes someone else
+    // owns.
+    match /savedRecipes/{savedRecipeId} {
+      allow read: if request.auth != null && request.auth.uid == resource.data.uid;
+      allow create: if request.auth != null &&
+        request.auth.uid == request.resource.data.uid &&
+        savedRecipeId == (request.auth.uid + '_' + request.resource.data.recipeId);
+      allow update: if request.auth != null &&
+        request.auth.uid == resource.data.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['categories', 'rating']);
+      allow delete: if request.auth != null && request.auth.uid == resource.data.uid;
+    }
+
+    // Recipes the background aggregator pulled in from recipe-blog RSS
+    // feeds for browsing/discovery. Any signed-in user can read the shared
+    // pool; only the aggregator (via the Admin SDK, which bypasses these
+    // rules entirely) ever writes to it.
+    match /discoveredRecipes/{discoveredRecipeId} {
+      allow read: if request.auth != null;
+      allow write: if false;
     }
 
     // Invites are created by a list owner, addressed to an email. Only the

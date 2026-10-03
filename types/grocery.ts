@@ -14,6 +14,11 @@ export type GroceryItem = {
   checked: boolean;
   addedBy: string;
   sources: GrocerySource[];
+  /**
+   * User-chosen section (fixed default or custom), overriding the automatic
+   * `categorizeIngredient()` guess. Absent means "use the automatic guess."
+   */
+  sectionOverride?: string;
 };
 
 /**

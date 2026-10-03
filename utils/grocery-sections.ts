@@ -47,6 +47,11 @@ const SECTION_KEYWORDS: Record<CategorizedSection, string[]> = {
   Frozen: ['frozen', 'ice cream', 'popsicle'],
 };
 
+/** The section an item actually belongs in — a user-chosen override, if set, otherwise the automatic guess. */
+export function effectiveSection(text: string, sectionOverride: string | undefined): string {
+  return sectionOverride ?? categorizeIngredient(text);
+}
+
 export function categorizeIngredient(text: string): GrocerySection {
   const normalized = text.toLowerCase();
 

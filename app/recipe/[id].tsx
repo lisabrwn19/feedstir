@@ -1,4 +1,5 @@
 import { Image } from 'expo-image';
+import { useKeepAwake } from 'expo-keep-awake';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
@@ -19,13 +20,18 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useAuth } from '@/context/auth-context';
+import { useFavorites } from '@/context/favorites-context';
 import { useGrocery } from '@/context/grocery-context';
 import { useRecipeDoc, useRecipes } from '@/context/recipes-context';
+import { useSavedRecipes } from '@/context/saved-recipes';
+import { useUserProfile } from '@/context/user-profile';
 import { useThemeColor } from '@/hooks/use-theme-color';
 import type { Recipe } from '@/types/recipe';
 import type { Menu } from '@/types/grocery';
 import { formatDateRangeLabel } from '@/utils/calendar';
+import { categoryEmoji, DEFAULT_CATEGORIES } from '@/utils/categories';
 import { menuLabel } from '@/utils/menu-labels';
+import { convertIngredientLine, detectPredominantSystem } from '@/utils/unit-conversion';
 
 // Matches the `accent` theme color (#0a7ea4), which is fixed across light/dark.
 const accentSoft = 'rgba(10, 126, 164, 0.12)';
@@ -443,6 +449,62 @@ function AddToMenuModal({
   );
 }
 
+// Which folders this recipe sits in, from the viewer's own point of view —
+// works the same whether you own the recipe (writes straight to
+// `recipe.categories`) or not (writes to your own `savedRecipes` doc,
+// since you can't edit someone else's recipe doc).
+function FoldersRow({ recipe, isOwner }: { recipe: Recipe; isOwner: boolean }) {
+  const { setRecipeCategories } = useRecipes();
+  const { getSavedMeta, toggleSavedCategory } = useSavedRecipes();
+  const accent = useThemeColor({}, 'accent');
+  const border = useThemeColor({}, 'icon');
+
+  const currentCategories = isOwner ? recipe.categories : getSavedMeta(recipe.id).categories;
+  const allChips = [
+    ...DEFAULT_CATEGORIES,
+    ...currentCategories.filter((c) => !DEFAULT_CATEGORIES.includes(c)),
+  ];
+
+  const handleToggle = (category: string) => {
+    if (isOwner) {
+      const next = currentCategories.includes(category)
+        ? currentCategories.filter((c) => c !== category)
+        : [...currentCategories, category];
+      setRecipeCategories(recipe.id, next);
+    } else {
+      toggleSavedCategory(recipe.id, category);
+    }
+  };
+
+  return (
+    <View style={styles.foldersBlock}>
+      <ThemedText type="defaultSemiBold" style={[styles.modificationsHeader, { color: border }]}>
+        FOLDERS
+      </ThemedText>
+      <View style={styles.categoryChipRow}>
+        {allChips.map((category) => {
+          const active = currentCategories.includes(category);
+          return (
+            <Pressable
+              key={category}
+              onPress={() => handleToggle(category)}
+              accessibilityLabel={`${category} folder${active ? ', saved' : ''}`}
+              style={[
+                styles.difficultyChip,
+                { borderColor: accent },
+                active && { backgroundColor: accent },
+              ]}>
+              <ThemedText style={[styles.difficultyChipText, { color: active ? '#fff' : accent }]}>
+                {categoryEmoji(category)} {category}
+              </ThemedText>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
 export default function RecipeDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
@@ -466,6 +528,10 @@ export default function RecipeDetailScreen() {
     toggleGroceryIngredient,
     removeItemsForRecipe,
   } = useGrocery();
+  const { isFavorite, toggleFavorite } = useFavorites();
+  // Keeps the screen on for as long as this recipe stays mounted; releases
+  // automatically on unmount (navigating away), so no manual cleanup needed.
+  useKeepAwake();
   const border = useThemeColor({}, 'icon');
   const accent = useThemeColor({}, 'accent');
   const placeholder = useThemeColor({}, 'icon');
@@ -474,6 +540,14 @@ export default function RecipeDetailScreen() {
   const [newModification, setNewModification] = useState('');
   const [showCompleteOverlay, setShowCompleteOverlay] = useState(false);
   const [showMenuPicker, setShowMenuPicker] = useState(false);
+  const [showConvertedUnits, setShowConvertedUnits] = useState(false);
+  // Every hook must run unconditionally before the loading/not-found
+  // returns below, so the "who owns this" check for the profile lookup is
+  // done defensively here rather than after `recipe` is known non-null.
+  const recipeOwnerId = recipe?.ownerId;
+  const ownerProfile = useUserProfile(
+    recipeOwnerId && recipeOwnerId !== user?.uid ? recipeOwnerId : undefined
+  );
 
   if (recipe === undefined) {
     return (
@@ -492,9 +566,22 @@ export default function RecipeDetailScreen() {
   }
 
   const isOwner = recipe.ownerId === user?.uid;
+  // Converting "to" the opposite of whatever system the recipe is mostly
+  // already written in — a single toggle, no separate unit picker needed.
+  const predominantUnitSystem = detectPredominantSystem(recipe.ingredients);
+  const targetUnitSystem = predominantUnitSystem === 'metric' ? 'us' : 'metric';
   const queuedMenuIndexes = menusContainingRecipe(recipe.id);
   const queuedInCurrentMenu = isQueuedInMenu(recipe.id, 0);
   const rating = recipe.rating;
+  const favorited = isFavorite(recipe.id);
+
+  const handleToggleFavorite = async () => {
+    try {
+      await toggleFavorite(recipe.id);
+    } catch (err) {
+      console.error('Failed to toggle favorite', err);
+    }
+  };
 
   const handleToggleMenu = (menuIndex: number) => {
     if (isQueuedInMenu(recipe.id, menuIndex)) {
@@ -582,23 +669,59 @@ export default function RecipeDetailScreen() {
       <ScrollView contentContainerStyle={styles.content}>
       <Stack.Screen
         options={{
-          headerRight: () =>
-            isOwner ? (
-              <View style={styles.headerActions}>
-                <Pressable onPress={handleEdit} hitSlop={8}>
-                  <IconSymbol name="pencil" size={20} color={accent} />
-                </Pressable>
-                <Pressable onPress={handleDelete} hitSlop={8}>
-                  <IconSymbol name="trash" size={20} color="#d64545" />
-                </Pressable>
-              </View>
-            ) : null,
+          headerRight: () => (
+            <View style={styles.headerActions}>
+              <Pressable
+                onPress={handleToggleFavorite}
+                hitSlop={8}
+                accessibilityLabel={favorited ? 'Unfavorite' : 'Favorite'}>
+                <IconSymbol
+                  name={favorited ? 'heart.fill' : 'heart'}
+                  size={20}
+                  color={favorited ? '#d64545' : accent}
+                />
+              </Pressable>
+              {isOwner ? (
+                <>
+                  <Pressable onPress={handleEdit} hitSlop={8}>
+                    <IconSymbol name="pencil" size={20} color={accent} />
+                  </Pressable>
+                  <Pressable onPress={handleDelete} hitSlop={8}>
+                    <IconSymbol name="trash" size={20} color="#d64545" />
+                  </Pressable>
+                </>
+              ) : null}
+            </View>
+          ),
         }}
       />
 
       {recipe.photoUri ? <Image source={{ uri: recipe.photoUri }} style={styles.photo} /> : null}
 
       <ThemedText type="title">{recipe.title}</ThemedText>
+
+      {recipe.sourceRating ? (
+        <View style={styles.sourceRatingRow}>
+          <IconSymbol name="star.fill" size={14} color={accent} />
+          <ThemedText style={[styles.sourceRatingText, { color: border }]}>
+            {recipe.sourceRating.ratingValue.toFixed(1)}
+            {recipe.sourceRating.reviewCount !== undefined
+              ? ` (${recipe.sourceRating.reviewCount.toLocaleString()})`
+              : ''}
+            {' · from the source site'}
+          </ThemedText>
+        </View>
+      ) : null}
+
+      {!isOwner ? (
+        <Pressable
+          onPress={() => router.push({ pathname: '/user/[uid]', params: { uid: recipe.ownerId } })}
+          hitSlop={8}>
+          <ThemedText style={[styles.sharedNote, { color: accent }]}>
+            By {ownerProfile?.displayName ?? '…'}
+          </ThemedText>
+        </Pressable>
+      ) : null}
 
       {isOwner ? (
         <>
@@ -637,28 +760,26 @@ export default function RecipeDetailScreen() {
               </Pressable>
             </View>
           ) : null}
-
-          {rating !== undefined || recipe.difficulty || recipe.timesMade > 0 ? (
-            <View style={styles.summaryRow}>
-              {rating !== undefined ? <StarRow rating={rating} /> : null}
-              {recipe.difficulty || recipe.timesMade > 0 ? (
-                <ThemedText style={[styles.summaryText, { color: border }]}>
-                  {[
-                    recipe.difficulty
-                      ? recipe.difficulty[0].toUpperCase() + recipe.difficulty.slice(1)
-                      : null,
-                    recipe.timesMade > 0 ? `Made ${recipe.timesMade}×` : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                </ThemedText>
-              ) : null}
-            </View>
-          ) : null}
         </>
-      ) : (
-        <ThemedText style={styles.sharedNote}>Shared with you on your grocery list.</ThemedText>
-      )}
+      ) : null}
+
+      {rating !== undefined || recipe.difficulty || recipe.timesMade > 0 ? (
+        <View style={styles.summaryRow}>
+          {rating !== undefined ? <StarRow rating={rating} /> : null}
+          {recipe.difficulty || recipe.timesMade > 0 ? (
+            <ThemedText style={[styles.summaryText, { color: border }]}>
+              {[
+                recipe.difficulty ? recipe.difficulty[0].toUpperCase() + recipe.difficulty.slice(1) : null,
+                recipe.timesMade > 0 ? `Made ${recipe.timesMade}×` : null,
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </ThemedText>
+          ) : null}
+        </View>
+      ) : null}
+
+      <FoldersRow recipe={recipe} isOwner={isOwner} />
 
       {metaItems.length > 0 ? (
         <View style={styles.metaRow}>
@@ -683,10 +804,27 @@ export default function RecipeDetailScreen() {
       ) : null}
 
       <View style={styles.section}>
-        <ThemedText type="subtitle">Ingredients</ThemedText>
+        <View style={styles.ingredientsHeaderRow}>
+          <ThemedText type="subtitle">Ingredients</ThemedText>
+          <Pressable
+            onPress={() => setShowConvertedUnits((v) => !v)}
+            hitSlop={8}
+            accessibilityLabel={
+              showConvertedUnits
+                ? 'Show original units'
+                : `Convert to ${targetUnitSystem === 'metric' ? 'Metric' : 'US'}`
+            }>
+            <ThemedText style={{ color: accent, fontSize: 13, fontWeight: '600' }}>
+              {showConvertedUnits
+                ? 'Show original'
+                : `Convert to ${targetUnitSystem === 'metric' ? 'Metric' : 'US'}`}
+            </ThemedText>
+          </Pressable>
+        </View>
         <ThemedText style={styles.sectionHint}>Tap an ingredient to add it to your grocery list.</ThemedText>
         {recipe.ingredients.map((ingredient, index) => {
           const added = isIngredientAdded(recipe.id, ingredient);
+          const converted = showConvertedUnits ? convertIngredientLine(ingredient, targetUnitSystem) : undefined;
           return (
             <Pressable
               key={index}
@@ -698,7 +836,8 @@ export default function RecipeDetailScreen() {
                 color={added ? accent : border}
               />
               <ThemedText style={[styles.bulletText, added && { color: accent }]}>
-                {ingredient}
+                {converted ? converted.text : ingredient}
+                {converted?.approximate ? ' (approx.)' : ''}
               </ThemedText>
               {added ? <ThemedText style={[styles.addedLabel, { color: accent }]}>Added</ThemedText> : null}
             </Pressable>
@@ -893,12 +1032,25 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   sharedNote: {
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  sourceRatingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: -8,
+  },
+  sourceRatingText: {
     fontSize: 13,
-    opacity: 0.6,
-    fontStyle: 'italic',
   },
   section: {
     gap: 10,
+  },
+  ingredientsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   sectionHint: {
     fontSize: 13,
@@ -925,6 +1077,14 @@ const styles = StyleSheet.create({
   modificationsHeader: {
     fontSize: 12,
     letterSpacing: 0.5,
+  },
+  foldersBlock: {
+    gap: 8,
+  },
+  categoryChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
   },
   modificationRow: {
     flexDirection: 'row',

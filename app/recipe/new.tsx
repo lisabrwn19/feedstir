@@ -10,10 +10,14 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { useAuth } from '@/context/auth-context';
+import { useDiscoveredRecipeDoc } from '@/context/discovered-recipes';
 import { useRecipeDoc, useRecipes } from '@/context/recipes-context';
 import { useThemeColor } from '@/hooks/use-theme-color';
+import type { DiscoveredRecipe } from '@/types/discovered-recipe';
 import type { Recipe } from '@/types/recipe';
-import { fetchAndParseRecipe } from '@/utils/parse-recipe';
+import { categoryEmoji, DEFAULT_CATEGORIES } from '@/utils/categories';
+import { inferCategories } from '@/utils/categorize';
+import { fetchAndParseRecipe, type AggregateRating } from '@/utils/parse-recipe';
 import { isLocalPhotoUri, uploadRecipePhoto } from '@/utils/upload-photo';
 
 function useFieldColors() {
@@ -85,11 +89,90 @@ function ListEditor({
   );
 }
 
+function CategoryPicker({
+  selected,
+  onChange,
+  autoSorted,
+}: {
+  selected: string[];
+  onChange: (categories: string[]) => void;
+  autoSorted?: boolean;
+}) {
+  const { text, border, placeholder } = useFieldColors();
+  const accent = useThemeColor({}, 'accent');
+  const [draft, setDraft] = useState('');
+
+  // Show every default chip plus any already-selected custom ones, so a
+  // category picked on another recipe (or added here) doesn't disappear.
+  const allChips = [...DEFAULT_CATEGORIES, ...selected.filter((c) => !DEFAULT_CATEGORIES.includes(c))];
+
+  const toggle = (category: string) => {
+    onChange(
+      selected.includes(category) ? selected.filter((c) => c !== category) : [...selected, category]
+    );
+  };
+
+  const addCustom = () => {
+    const trimmed = draft.trim();
+    if (!trimmed || selected.includes(trimmed)) return;
+    onChange([...selected, trimmed]);
+    setDraft('');
+  };
+
+  return (
+    <View style={styles.field}>
+      <FieldLabel>Categories</FieldLabel>
+      {autoSorted ? (
+        <ThemedText style={[styles.categoryHint, { color: border }]}>
+          Auto-sorted from your recipe — tap to adjust.
+        </ThemedText>
+      ) : null}
+      <View style={styles.categoryChipRow}>
+        {allChips.map((category) => {
+          const active = selected.includes(category);
+          return (
+            <Pressable
+              key={category}
+              onPress={() => toggle(category)}
+              style={[
+                styles.categoryChip,
+                { borderColor: accent },
+                active && { backgroundColor: accent },
+              ]}>
+              <ThemedText style={[styles.categoryChipText, { color: active ? '#fff' : accent }]}>
+                {categoryEmoji(category)} {category}
+              </ThemedText>
+            </Pressable>
+          );
+        })}
+      </View>
+      <View style={styles.importRow}>
+        <TextInput
+          value={draft}
+          onChangeText={setDraft}
+          placeholder="Add a custom category"
+          placeholderTextColor={placeholder}
+          onSubmitEditing={addCustom}
+          returnKeyType="done"
+          style={[styles.input, styles.importInput, { color: text, borderColor: border }]}
+        />
+        <Pressable
+          onPress={addCustom}
+          disabled={!draft.trim()}
+          style={[styles.importButton, { backgroundColor: accent, opacity: draft.trim() ? 1 : 0.5 }]}>
+          <IconSymbol name="plus" size={20} color="#fff" />
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
 export default function NewRecipeScreen() {
-  const { id } = useLocalSearchParams<{ id?: string }>();
+  const { id, discoverId } = useLocalSearchParams<{ id?: string; discoverId?: string }>();
   const isEditing = !!id;
   const { user } = useAuth();
   const existingRecipe = useRecipeDoc(id);
+  const discovered = useDiscoveredRecipeDoc(isEditing ? undefined : discoverId);
 
   if (isEditing && existingRecipe === undefined) {
     return (
@@ -105,16 +188,31 @@ export default function NewRecipeScreen() {
       </ThemedView>
     );
   }
+  if (!isEditing && discoverId && discovered === undefined) {
+    return (
+      <ThemedView style={styles.centered}>
+        <ThemedText>Loading…</ThemedText>
+      </ThemedView>
+    );
+  }
+  if (!isEditing && discoverId && discovered === null) {
+    return (
+      <ThemedView style={styles.centered}>
+        <ThemedText>Recipe not found.</ThemedText>
+      </ThemedView>
+    );
+  }
 
-  // Keyed by recipe id so editing a different recipe remounts the form with
-  // fresh initial state pulled directly from props, instead of needing an
-  // effect to re-sync form fields after the id changes.
+  // Keyed by recipe/discovered id so switching between them remounts the
+  // form with fresh initial state pulled directly from props, instead of
+  // needing an effect to re-sync form fields after the id changes.
   return (
     <RecipeForm
-      key={isEditing ? existingRecipe?.id : 'new'}
+      key={isEditing ? existingRecipe?.id : discoverId ? `discover-${discovered?.id}` : 'new'}
       isEditing={isEditing}
       id={id}
       existingRecipe={isEditing ? (existingRecipe ?? undefined) : undefined}
+      initialDiscovered={isEditing ? undefined : (discovered ?? undefined)}
     />
   );
 }
@@ -123,10 +221,12 @@ function RecipeForm({
   isEditing,
   id,
   existingRecipe,
+  initialDiscovered,
 }: {
   isEditing: boolean;
   id: string | undefined;
   existingRecipe: Recipe | undefined;
+  initialDiscovered: DiscoveredRecipe | undefined;
 }) {
   const router = useRouter();
   const { user } = useAuth();
@@ -140,24 +240,36 @@ function RecipeForm({
     transform: [{ translateY: -keyboard.height.value }],
   }));
 
-  const [title, setTitle] = useState(existingRecipe?.title ?? '');
-  const [photoUri, setPhotoUri] = useState<string | undefined>(existingRecipe?.photoUri);
-  const [servings, setServings] = useState(
-    existingRecipe?.servings ? String(existingRecipe.servings) : ''
+  // A discovered recipe seeds the same fields an edit or a manual URL
+  // import would — existingRecipe and initialDiscovered are mutually
+  // exclusive (discovery only ever starts a brand-new, non-editing form).
+  const seed = existingRecipe ?? initialDiscovered;
+
+  const [title, setTitle] = useState(seed?.title ?? '');
+  const [photoUri, setPhotoUri] = useState<string | undefined>(seed?.photoUri);
+  const [servings, setServings] = useState(seed?.servings ? String(seed.servings) : '');
+  const [prepTime, setPrepTime] = useState(seed?.prepTimeMinutes ? String(seed.prepTimeMinutes) : '');
+  const [cookTime, setCookTime] = useState(seed?.cookTimeMinutes ? String(seed.cookTimeMinutes) : '');
+  const [sourceUrl, setSourceUrl] = useState(
+    existingRecipe?.sourceUrl ?? initialDiscovered?.sourceUrl ?? ''
   );
-  const [prepTime, setPrepTime] = useState(
-    existingRecipe?.prepTimeMinutes ? String(existingRecipe.prepTimeMinutes) : ''
+  const [sourceRating, setSourceRating] = useState<AggregateRating | undefined>(
+    existingRecipe?.sourceRating
   );
-  const [cookTime, setCookTime] = useState(
-    existingRecipe?.cookTimeMinutes ? String(existingRecipe.cookTimeMinutes) : ''
-  );
-  const [sourceUrl, setSourceUrl] = useState(existingRecipe?.sourceUrl ?? '');
-  const [ingredients, setIngredients] = useState(
-    existingRecipe?.ingredients.length ? existingRecipe.ingredients : ['']
-  );
+  const [ingredients, setIngredients] = useState(seed?.ingredients.length ? seed.ingredients : ['']);
   const [instructions, setInstructions] = useState(
-    existingRecipe?.instructions.length ? existingRecipe.instructions : ['']
+    seed?.instructions.length ? seed.instructions : ['']
   );
+  // `undefined` means "not yet touched by the user" — categories are derived
+  // live from the title/ingredients below instead. Editing an existing
+  // recipe starts already-touched, so auto-sorting never overrides
+  // categories someone already set. Once the user interacts with the
+  // picker, their explicit choice (even `[]`) takes over for good.
+  const [manualCategories, setManualCategories] = useState<string[] | undefined>(
+    existingRecipe ? (existingRecipe.categories ?? []) : undefined
+  );
+  const categories = manualCategories ?? inferCategories({ title, ingredients });
+  const autoSorted = manualCategories === undefined && categories.length > 0;
 
   const [importUrl, setImportUrl] = useState('');
   const [importing, setImporting] = useState(false);
@@ -188,6 +300,7 @@ function RecipeForm({
       if (recipe.prepTimeMinutes) setPrepTime(String(recipe.prepTimeMinutes));
       if (recipe.cookTimeMinutes) setCookTime(String(recipe.cookTimeMinutes));
       setSourceUrl(trimmedUrl);
+      setSourceRating(recipe.aggregateRating);
 
       if (!matched) {
         setImportNotice("Found the page but not the full recipe — check the details below.");
@@ -264,6 +377,8 @@ function RecipeForm({
         prepTimeMinutes: Number.isFinite(parsedPrepTime) ? parsedPrepTime : undefined,
         cookTimeMinutes: Number.isFinite(parsedCookTime) ? parsedCookTime : undefined,
         sourceUrl: sourceUrl.trim() || undefined,
+        sourceRating,
+        categories,
       };
       if (isEditing && id) {
         await updateRecipe(id, payload);
@@ -281,12 +396,16 @@ function RecipeForm({
 
   return (
     <View style={styles.flex}>
-      <Stack.Screen options={{ title: isEditing ? 'Edit Recipe' : 'New Recipe' }} />
+      <Stack.Screen
+        options={{
+          title: isEditing ? 'Edit Recipe' : initialDiscovered ? 'Save Recipe' : 'New Recipe',
+        }}
+      />
       <ScrollView
         style={styles.flex}
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled">
-        {isEditing ? null : (
+        {isEditing || initialDiscovered ? null : (
           <View style={styles.field}>
             <FieldLabel>Import from a link</FieldLabel>
             <View style={styles.importRow}>
@@ -398,6 +517,8 @@ function RecipeForm({
           />
         </View>
 
+        <CategoryPicker selected={categories} onChange={setManualCategories} autoSorted={autoSorted} />
+
         <ListEditor
           label="Ingredients"
           placeholder="e.g. 2 cups flour"
@@ -491,6 +612,24 @@ const styles = StyleSheet.create({
   },
   importError: {
     color: '#d64545',
+  },
+  categoryChipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  categoryChip: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  categoryChipText: {
+    fontWeight: '600',
+  },
+  categoryHint: {
+    fontSize: 13,
+    marginTop: -4,
   },
   photo: {
     width: '100%',

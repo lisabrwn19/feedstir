@@ -12,6 +12,7 @@ import {
   where,
   type DocumentData,
   type DocumentSnapshot,
+  type QuerySnapshot,
 } from 'firebase/firestore';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 
@@ -29,6 +30,7 @@ type RecipesContextValue = {
   markRecipeMade: (id: string) => void;
   setRecipeRating: (id: string, rating: number | undefined) => void;
   setRecipeDifficulty: (id: string, difficulty: Recipe['difficulty']) => void;
+  setRecipeCategories: (id: string, categories: string[]) => void;
   addRecipeModification: (id: string, text: string) => void;
   removeRecipeModification: (id: string, text: string) => void;
 };
@@ -61,7 +63,7 @@ function toFirestoreUpdate<T extends Record<string, unknown>>(obj: T): Record<st
   return result;
 }
 
-function mapRecipe(id: string, data: DocumentData): Recipe {
+export function mapRecipe(id: string, data: DocumentData): Recipe {
   return {
     id,
     ownerId: data.ownerId,
@@ -69,6 +71,8 @@ function mapRecipe(id: string, data: DocumentData): Recipe {
     ingredients: data.ingredients ?? [],
     instructions: data.instructions ?? [],
     modifications: data.modifications ?? [],
+    categories: data.categories ?? [],
+    sourceRating: data.sourceRating ?? undefined,
     photoUri: data.photoUri ?? undefined,
     servings: data.servings ?? undefined,
     prepTimeMinutes: data.prepTimeMinutes ?? undefined,
@@ -144,6 +148,9 @@ export function RecipesProvider({ children }: { children: ReactNode }) {
           difficulty: difficulty ?? deleteField(),
         });
       },
+      setRecipeCategories: (id, categories) => {
+        updateDoc(doc(db, 'recipes', id), { categories });
+      },
       addRecipeModification: (id, text) => {
         const trimmed = text.trim();
         if (!trimmed) return;
@@ -193,4 +200,70 @@ export function useRecipeDoc(recipeId: string | undefined) {
   }, [recipeId]);
 
   return recipe;
+}
+
+/**
+ * Live query of any user's recipes by uid — used to browse a followed
+ * user's library. Relies entirely on the Firestore rule (owner, grocery-list
+ * member, or follower can read a recipe) to return results only when we're
+ * actually allowed to see them; an unauthorized uid just yields an empty list.
+ */
+export function useUserRecipes(uid: string | undefined) {
+  const [recipes, setRecipes] = useState<Recipe[] | undefined>(undefined);
+
+  useEffect(() => {
+    if (!uid) {
+      setRecipes(undefined);
+      return;
+    }
+    setRecipes(undefined);
+    const recipesQuery = query(collection(db, 'recipes'), where('ownerId', '==', uid));
+    return subscribeWithRetry<QuerySnapshot<DocumentData>>(
+      (onNext, onError) => onSnapshot(recipesQuery, onNext, onError),
+      (snapshot) => {
+        const next = snapshot.docs.map((d) => mapRecipe(d.id, d.data()));
+        next.sort((a, b) => b.createdAt - a.createdAt);
+        setRecipes(next);
+      },
+      (err) => {
+        console.error('User recipes listener error', uid, err);
+        setRecipes([]);
+      }
+    );
+  }, [uid]);
+
+  return recipes;
+}
+
+/**
+ * Live pool of recipes owned by any of the given uids — used for the
+ * Discover carousel (your own recipes + everyone you follow, combined).
+ * Keyed off a sorted/deduped string rather than the raw array so passing a
+ * freshly-spread `[myUid, ...followingIds]` array each render doesn't
+ * re-subscribe on every render.
+ */
+export function useDiscoverRecipes(ownerIds: string[]) {
+  const [recipes, setRecipes] = useState<Recipe[] | undefined>(undefined);
+  const key = [...new Set(ownerIds)].sort().join(',');
+
+  useEffect(() => {
+    const ids = key ? key.split(',') : [];
+    if (ids.length === 0) {
+      setRecipes([]);
+      return;
+    }
+    // Firestore's `in` operator caps at 30 values — plenty for this app's
+    // scale (follow counts aren't expected to approach that).
+    const recipesQuery = query(collection(db, 'recipes'), where('ownerId', 'in', ids.slice(0, 30)));
+    return subscribeWithRetry<QuerySnapshot<DocumentData>>(
+      (onNext, onError) => onSnapshot(recipesQuery, onNext, onError),
+      (snapshot) => setRecipes(snapshot.docs.map((d) => mapRecipe(d.id, d.data()))),
+      (err) => {
+        console.error('Discover recipes listener error', err);
+        setRecipes([]);
+      }
+    );
+  }, [key]);
+
+  return recipes;
 }

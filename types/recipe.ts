@@ -1,3 +1,5 @@
+import type { AggregateRating } from '@/utils/parse-recipe';
+
 export type Recipe = {
   id: string;
   ownerId: string;
@@ -6,6 +8,10 @@ export type Recipe = {
   instructions: string[];
   /** Extra ingredients the owner has noted for this recipe, kept separate from the original ingredient list. */
   modifications: string[];
+  /** Folder tags (e.g. "Dinner", "Dessert") — a recipe can belong to several. */
+  categories: string[];
+  /** The source site's own rating, captured at import time — distinct from `rating`, the owner's own post-cook rating. */
+  sourceRating?: AggregateRating;
   photoUri?: string;
   servings?: number;
   prepTimeMinutes?: number;

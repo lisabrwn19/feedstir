@@ -41,6 +41,15 @@ const MAPPING = {
   pencil: 'edit',
   trash: 'delete',
   ellipsis: 'more-horiz',
+  'sparkles': 'auto-awesome',
+  'arrow.up.right': 'open-in-new',
+  'person.crop.circle': 'account-circle',
+  'person.crop.circle.badge.plus': 'person-add',
+  'checkmark': 'check',
+  heart: 'favorite-border',
+  'heart.fill': 'favorite',
+  'arrow.triangle.2.circlepath': 'shuffle',
+  folder: 'folder',
 } as IconMapping;
 
 /**

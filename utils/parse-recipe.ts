@@ -1,3 +1,8 @@
+export type AggregateRating = {
+  ratingValue: number;
+  reviewCount?: number;
+};
+
 export type ParsedRecipe = {
   title?: string;
   ingredients: string[];
@@ -6,6 +11,8 @@ export type ParsedRecipe = {
   servings?: number;
   prepTimeMinutes?: number;
   cookTimeMinutes?: number;
+  /** The source site's own rating (e.g. "4.8 stars, 230 reviews"), when published in its schema.org data. */
+  aggregateRating?: AggregateRating;
 };
 
 export type ParseResult = {
@@ -61,6 +68,7 @@ export function parseRecipeFromHtml(html: string): ParseResult | null {
           servings: extractServings(node.recipeYield),
           prepTimeMinutes: parseIsoDurationToMinutes(node.prepTime),
           cookTimeMinutes: parseIsoDurationToMinutes(node.cookTime),
+          aggregateRating: extractAggregateRating(node.aggregateRating),
         },
       };
     }
@@ -174,6 +182,24 @@ function extractServings(value: unknown): number | undefined {
   if (typeof raw === 'string') {
     const match = raw.match(/\d+/);
     if (match) return parseInt(match[0], 10);
+  }
+  return undefined;
+}
+
+function extractAggregateRating(value: unknown): AggregateRating | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const obj = value as Record<string, unknown>;
+  const ratingValue = toNumber(obj.ratingValue);
+  if (ratingValue === undefined) return undefined;
+  const reviewCount = toNumber(obj.reviewCount ?? obj.ratingCount);
+  return reviewCount !== undefined ? { ratingValue, reviewCount } : { ratingValue };
+}
+
+function toNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const parsed = parseFloat(value);
+    if (Number.isFinite(parsed)) return parsed;
   }
   return undefined;
 }
