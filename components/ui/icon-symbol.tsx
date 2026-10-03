@@ -50,6 +50,7 @@ const MAPPING = {
   'heart.fill': 'favorite',
   'arrow.triangle.2.circlepath': 'shuffle',
   folder: 'folder',
+  'line.3.horizontal': 'drag-indicator',
 } as IconMapping;
 
 /**

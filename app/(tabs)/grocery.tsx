@@ -1,6 +1,7 @@
 import { doc, onSnapshot } from 'firebase/firestore';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Modal, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import DraggableFlatList, { ScaleDecorator, type RenderItemParams } from 'react-native-draggable-flatlist';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { IconSymbol } from '@/components/ui/icon-symbol';
@@ -11,6 +12,31 @@ import { useThemeColor } from '@/hooks/use-theme-color';
 import { db } from '@/lib/firebase';
 import type { GroceryItem } from '@/types/grocery';
 import { effectiveSection, GROCERY_SECTIONS } from '@/utils/grocery-sections';
+
+type Row =
+  | { rowType: 'header'; key: string; section: string; isCustom: boolean }
+  | { rowType: 'empty-hint'; key: string }
+  | { rowType: 'item'; key: string; item: GroceryItem };
+
+// Only sections that already have an item (or are custom) get a header —
+// a brand-new empty default section isn't a drag target until something's
+// moved into it some other way, same as before this feature existed.
+function buildRows(visibleSections: string[], groceryItems: GroceryItem[], customSections: string[]): Row[] {
+  const rows: Row[] = [];
+  for (const section of visibleSections) {
+    const items = groceryItems
+      .filter((item) => effectiveSection(item.text, item.sectionOverride) === section)
+      .sort((a, b) => (a.order ?? Number.MAX_SAFE_INTEGER) - (b.order ?? Number.MAX_SAFE_INTEGER));
+    rows.push({ rowType: 'header', key: `header:${section}`, section, isCustom: customSections.includes(section) });
+    if (items.length === 0) {
+      rows.push({ rowType: 'empty-hint', key: `empty:${section}` });
+    }
+    for (const item of items) {
+      rows.push({ rowType: 'item', key: item.id, item });
+    }
+  }
+  return rows;
+}
 
 function useUserEmail(uid: string | undefined) {
   const [email, setEmail] = useState<string | undefined>();
@@ -417,6 +443,102 @@ function MoveItemModal({
   );
 }
 
+function SectionHeaderRow({
+  section,
+  isCustom,
+  onRename,
+  onDelete,
+}: {
+  section: string;
+  isCustom: boolean;
+  onRename: () => void;
+  onDelete: () => void;
+}) {
+  const border = useThemeColor({}, 'icon');
+
+  return (
+    <View style={styles.sectionLabelRow}>
+      <ThemedText style={[styles.sectionLabel, { color: border }]}>{section.toUpperCase()}</ThemedText>
+      {isCustom ? (
+        <View style={styles.sectionLabelActions}>
+          <Pressable onPress={onRename} hitSlop={8} accessibilityLabel={`Rename ${section} section`}>
+            <IconSymbol name="pencil" size={14} color={border} />
+          </Pressable>
+          <Pressable onPress={onDelete} hitSlop={8} accessibilityLabel={`Delete ${section} section`}>
+            <IconSymbol name="trash" size={14} color={border} />
+          </Pressable>
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function DraggableGroceryRow({
+  item,
+  drag,
+  isActive,
+  onToggleChecked,
+  onPreview,
+  onMove,
+  onRemove,
+}: {
+  item: GroceryItem;
+  drag: () => void;
+  isActive: boolean;
+  onToggleChecked: () => void;
+  onPreview: () => void;
+  onMove: () => void;
+  onRemove: () => void;
+}) {
+  const accent = useThemeColor({}, 'accent');
+  const border = useThemeColor({}, 'icon');
+  const recipeTitles = Array.from(
+    new Set(item.sources.map((s) => s.recipeTitle).filter((title): title is string => Boolean(title)))
+  );
+
+  return (
+    <ScaleDecorator>
+      <View style={[styles.groceryRow, isActive && { opacity: 0.7 }]}>
+        <Pressable
+          onPressIn={drag}
+          hitSlop={8}
+          accessibilityLabel={`Drag ${item.text} to reorder or move it`}
+          style={styles.dragHandle}>
+          <IconSymbol name="line.3.horizontal" size={16} color={border} />
+        </Pressable>
+        <Pressable
+          onPress={onToggleChecked}
+          hitSlop={8}
+          accessibilityRole="checkbox"
+          accessibilityLabel={`Mark ${item.text} as ${item.checked ? 'not bought' : 'bought'}`}
+          style={styles.groceryCheckbox}>
+          <IconSymbol
+            name={item.checked ? 'checkmark.circle.fill' : 'circle'}
+            size={22}
+            color={item.checked ? accent : border}
+          />
+        </Pressable>
+        <Pressable
+          onPress={onPreview}
+          accessibilityRole="button"
+          accessibilityLabel={`Preview ${item.text} details`}
+          style={styles.groceryTextBlock}>
+          <ThemedText style={item.checked ? styles.groceryTextChecked : undefined}>{item.text}</ThemedText>
+          {recipeTitles.length > 0 ? (
+            <ThemedText style={styles.groceryRecipeLabel}>{recipeTitles.join(', ')}</ThemedText>
+          ) : null}
+        </Pressable>
+        <Pressable onPress={onMove} hitSlop={8} accessibilityLabel={`Move ${item.text} to another section`}>
+          <IconSymbol name="folder" size={16} color={border} />
+        </Pressable>
+        <Pressable onPress={onRemove} hitSlop={8}>
+          <IconSymbol name="xmark" size={16} color={border} />
+        </Pressable>
+      </View>
+    </ScaleDecorator>
+  );
+}
+
 export default function GroceryScreen() {
   const {
     groceryItems,
@@ -430,6 +552,7 @@ export default function GroceryScreen() {
     removeGrocerySection,
     setGroceryItemSection,
     updateGroceryItemText,
+    reorderGroceryItems,
   } = useGrocery();
   const text = useThemeColor({}, 'text');
   const border = useThemeColor({}, 'icon');
@@ -449,150 +572,125 @@ export default function GroceryScreen() {
   };
 
   const allSections = [...GROCERY_SECTIONS, ...customSections];
-  const groupedSections = allSections
-    .map((section) => {
-      const items = groceryItems.filter(
-        (item) => effectiveSection(item.text, item.sectionOverride) === section
-      );
-      const unchecked = items.filter((item) => !item.checked);
-      const checked = items.filter((item) => item.checked);
-      return { section, items: [...unchecked, ...checked], isCustom: customSections.includes(section) };
-    })
-    // Fixed default sections stay hidden while empty, same as before. Custom
-    // sections always show — otherwise a newly-added one with nothing moved
-    // into it yet would vanish, with no way to rename or delete it.
-    .filter((group) => group.items.length > 0 || group.isCustom);
+  const itemCountBySection = new Map<string, number>();
+  for (const item of groceryItems) {
+    const section = effectiveSection(item.text, item.sectionOverride);
+    itemCountBySection.set(section, (itemCountBySection.get(section) ?? 0) + 1);
+  }
+  // Fixed default sections stay hidden while empty, same as before. Custom
+  // sections always show — otherwise a newly-added one with nothing moved
+  // into it yet would vanish, with no way to rename or delete it.
+  const visibleSections = allSections.filter(
+    (section) => (itemCountBySection.get(section) ?? 0) > 0 || customSections.includes(section)
+  );
+  const rows = groceryItems.length > 0 ? buildRows(visibleSections, groceryItems, customSections) : [];
   const checkedItems = groceryItems.filter((item) => item.checked);
+
+  const handleDragEnd = ({ data }: { data: Row[] }) => {
+    let currentSection = visibleSections[0] ?? GROCERY_SECTIONS[0];
+    let orderInSection = 0;
+    const updates: { id: string; section: string; order: number }[] = [];
+    for (const row of data) {
+      if (row.rowType === 'header') {
+        currentSection = row.section;
+        orderInSection = 0;
+      } else if (row.rowType === 'item') {
+        updates.push({ id: row.item.id, section: currentSection, order: orderInSection });
+        orderInSection += 1;
+      }
+    }
+    reorderGroceryItems(updates);
+  };
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <InviteBanner />
-
-        <View style={styles.section}>
-          <View style={styles.listHeaderRow}>
-            <ThemedText type="subtitle">Grocery List</ThemedText>
-            {checkedItems.length > 0 ? (
-              <Pressable onPress={clearCheckedItems}>
-                <ThemedText style={{ color: accent }}>Clear checked</ThemedText>
-              </Pressable>
-            ) : null}
-          </View>
-
-          <View style={styles.importRow}>
-            <TextInput
-              value={manualItemText}
-              onChangeText={setManualItemText}
-              placeholder="Add an item"
-              placeholderTextColor={border}
-              onSubmitEditing={handleAddManualItem}
-              returnKeyType="done"
-              style={[styles.input, { color: text, borderColor: border }]}
-            />
-            <Pressable
-              onPress={handleAddManualItem}
-              disabled={!manualItemText.trim()}
-              style={[
-                styles.inviteButton,
-                { backgroundColor: accent, opacity: manualItemText.trim() ? 1 : 0.5 },
-              ]}>
-              <IconSymbol name="plus" size={20} color="#fff" />
-            </Pressable>
-          </View>
-
-          {groupedSections.length === 0 ? (
-            <ThemedText style={styles.emptyHint}>
-              Tap ingredients on a recipe, or add an item above.
-            </ThemedText>
-          ) : (
-            groupedSections.map(({ section, items, isCustom }) => (
-              <View key={section} style={styles.sectionGroup}>
-                <View style={styles.sectionLabelRow}>
-                  <ThemedText style={[styles.sectionLabel, { color: border }]}>
-                    {section.toUpperCase()}
-                  </ThemedText>
-                  {isCustom ? (
-                    <View style={styles.sectionLabelActions}>
-                      <Pressable
-                        onPress={() => setRenamingSection(section)}
-                        hitSlop={8}
-                        accessibilityLabel={`Rename ${section} section`}>
-                        <IconSymbol name="pencil" size={14} color={border} />
-                      </Pressable>
-                      <Pressable
-                        onPress={() => setDeletingSection(section)}
-                        hitSlop={8}
-                        accessibilityLabel={`Delete ${section} section`}>
-                        <IconSymbol name="trash" size={14} color={border} />
-                      </Pressable>
-                    </View>
-                  ) : null}
-                </View>
-                {items.length === 0 ? (
-                  <ThemedText style={[styles.sectionEmptyHint, { color: border }]}>
-                    No items yet — move one here with the folder icon.
-                  </ThemedText>
+      <DraggableFlatList
+        data={rows}
+        keyExtractor={(row) => row.key}
+        onDragEnd={handleDragEnd}
+        contentContainerStyle={styles.content}
+        ListHeaderComponent={
+          <>
+            <InviteBanner />
+            <View style={styles.listHeaderBlock}>
+              <View style={styles.listHeaderRow}>
+                <ThemedText type="subtitle">Grocery List</ThemedText>
+                {checkedItems.length > 0 ? (
+                  <Pressable onPress={clearCheckedItems}>
+                    <ThemedText style={{ color: accent }}>Clear checked</ThemedText>
+                  </Pressable>
                 ) : null}
-                {items.map((item) => {
-                  const recipeTitles = Array.from(
-                    new Set(
-                      item.sources
-                        .map((s) => s.recipeTitle)
-                        .filter((title): title is string => Boolean(title))
-                    )
-                  );
-                  return (
-                    <View key={item.id} style={styles.groceryRow}>
-                      <Pressable
-                        onPress={() => toggleGroceryItemChecked(item.id)}
-                        hitSlop={8}
-                        accessibilityRole="checkbox"
-                        accessibilityLabel={`Mark ${item.text} as ${item.checked ? 'not bought' : 'bought'}`}
-                        style={styles.groceryCheckbox}>
-                        <IconSymbol
-                          name={item.checked ? 'checkmark.circle.fill' : 'circle'}
-                          size={22}
-                          color={item.checked ? accent : border}
-                        />
-                      </Pressable>
-                      <Pressable
-                        onPress={() => setPreviewItem(item)}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Preview ${item.text} details`}
-                        style={styles.groceryTextBlock}>
-                        <ThemedText style={item.checked ? styles.groceryTextChecked : undefined}>
-                          {item.text}
-                        </ThemedText>
-                        {recipeTitles.length > 0 ? (
-                          <ThemedText style={styles.groceryRecipeLabel}>
-                            {recipeTitles.join(', ')}
-                          </ThemedText>
-                        ) : null}
-                      </Pressable>
-                      <Pressable
-                        onPress={() => setMoveItem(item)}
-                        hitSlop={8}
-                        accessibilityLabel={`Move ${item.text} to another section`}>
-                        <IconSymbol name="folder" size={16} color={border} />
-                      </Pressable>
-                      <Pressable onPress={() => removeGroceryItem(item.id)} hitSlop={8}>
-                        <IconSymbol name="xmark" size={16} color={border} />
-                      </Pressable>
-                    </View>
-                  );
-                })}
               </View>
-            ))
-          )}
 
-          <Pressable onPress={() => setAddingSection(true)} style={styles.addSectionButton}>
-            <IconSymbol name="plus" size={16} color={accent} />
-            <ThemedText style={{ color: accent }}>Add Section</ThemedText>
-          </Pressable>
-        </View>
+              <View style={styles.importRow}>
+                <TextInput
+                  value={manualItemText}
+                  onChangeText={setManualItemText}
+                  placeholder="Add an item"
+                  placeholderTextColor={border}
+                  onSubmitEditing={handleAddManualItem}
+                  returnKeyType="done"
+                  style={[styles.input, { color: text, borderColor: border }]}
+                />
+                <Pressable
+                  onPress={handleAddManualItem}
+                  disabled={!manualItemText.trim()}
+                  style={[
+                    styles.inviteButton,
+                    { backgroundColor: accent, opacity: manualItemText.trim() ? 1 : 0.5 },
+                  ]}>
+                  <IconSymbol name="plus" size={20} color="#fff" />
+                </Pressable>
+              </View>
 
-        <SharingSection />
-      </ScrollView>
+              {rows.length === 0 ? (
+                <ThemedText style={styles.emptyHint}>
+                  Tap ingredients on a recipe, or add an item above.
+                </ThemedText>
+              ) : null}
+            </View>
+          </>
+        }
+        renderItem={({ item: row, drag, isActive }: RenderItemParams<Row>) => {
+          if (row.rowType === 'header') {
+            return (
+              <SectionHeaderRow
+                section={row.section}
+                isCustom={row.isCustom}
+                onRename={() => setRenamingSection(row.section)}
+                onDelete={() => setDeletingSection(row.section)}
+              />
+            );
+          }
+          if (row.rowType === 'empty-hint') {
+            return (
+              <ThemedText style={[styles.sectionEmptyHint, { color: border }]}>
+                No items yet — move one here with the folder icon, or drag one in.
+              </ThemedText>
+            );
+          }
+          return (
+            <DraggableGroceryRow
+              item={row.item}
+              drag={drag}
+              isActive={isActive}
+              onToggleChecked={() => toggleGroceryItemChecked(row.item.id)}
+              onPreview={() => setPreviewItem(row.item)}
+              onMove={() => setMoveItem(row.item)}
+              onRemove={() => removeGroceryItem(row.item.id)}
+            />
+          );
+        }}
+        ListFooterComponent={
+          <View style={styles.listFooterBlock}>
+            <Pressable onPress={() => setAddingSection(true)} style={styles.addSectionButton}>
+              <IconSymbol name="plus" size={16} color={accent} />
+              <ThemedText style={{ color: accent }}>Add Section</ThemedText>
+            </Pressable>
+            <SharingSection />
+          </View>
+        }
+      />
 
       <GroceryItemPreview
         item={previewItem}
@@ -640,10 +738,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingTop: 16,
     paddingBottom: 32,
-    gap: 28,
   },
   section: {
     gap: 12,
+  },
+  listHeaderBlock: {
+    gap: 12,
+    marginBottom: 16,
+  },
+  listFooterBlock: {
+    gap: 12,
+    marginTop: 16,
   },
   listHeaderRow: {
     flexDirection: 'row',
@@ -653,8 +758,8 @@ const styles = StyleSheet.create({
   emptyHint: {
     opacity: 0.6,
   },
-  sectionGroup: {
-    gap: 2,
+  dragHandle: {
+    padding: 2,
   },
   sectionLabel: {
     fontSize: 12,

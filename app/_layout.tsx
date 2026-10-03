@@ -1,5 +1,6 @@
 import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import 'react-native-reanimated';
 
 import { ThemedView } from '@/components/themed-view';
@@ -53,25 +54,27 @@ export default function RootLayout() {
   const colorScheme = useColorScheme();
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <AuthProvider>
-        <FollowProvider>
-          <FavoritesProvider>
-            <CategoryEmojisProvider>
-              <SavedRecipesProvider>
-                <RecipesProvider>
-                  <GroceryProvider>
-                    <ActiveTabProvider>
-                      <AppNavigator />
-                    </ActiveTabProvider>
-                  </GroceryProvider>
-                </RecipesProvider>
-              </SavedRecipesProvider>
-            </CategoryEmojisProvider>
-          </FavoritesProvider>
-        </FollowProvider>
-      </AuthProvider>
-      <StatusBar style="auto" />
-    </ThemeProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+        <AuthProvider>
+          <FollowProvider>
+            <FavoritesProvider>
+              <CategoryEmojisProvider>
+                <SavedRecipesProvider>
+                  <RecipesProvider>
+                    <GroceryProvider>
+                      <ActiveTabProvider>
+                        <AppNavigator />
+                      </ActiveTabProvider>
+                    </GroceryProvider>
+                  </RecipesProvider>
+                </SavedRecipesProvider>
+              </CategoryEmojisProvider>
+            </FavoritesProvider>
+          </FollowProvider>
+        </AuthProvider>
+        <StatusBar style="auto" />
+      </ThemeProvider>
+    </GestureHandlerRootView>
   );
 }

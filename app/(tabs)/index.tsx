@@ -473,6 +473,10 @@ const styles = StyleSheet.create({
   },
   folderTileEmoji: {
     fontSize: 36,
+    // iOS clips large emoji glyphs to the font's nominal line height, which
+    // is shorter than the glyph's actual rendered bounds — an explicit,
+    // generous lineHeight stops the top/bottom from being cut off.
+    lineHeight: 44,
   },
   folderEditBadge: {
     position: 'absolute',
@@ -517,6 +521,7 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: 12,
     fontSize: 36,
+    lineHeight: 44,
     textAlign: 'center',
     paddingVertical: 12,
   },

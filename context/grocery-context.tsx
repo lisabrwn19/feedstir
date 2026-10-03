@@ -12,6 +12,7 @@ import {
   setDoc,
   updateDoc,
   where,
+  writeBatch,
   type DocumentData,
   type DocumentSnapshot,
   type QuerySnapshot,
@@ -71,6 +72,8 @@ type GroceryContextValue = {
   setGroceryItemSection: (id: string, section: string | undefined) => void;
   /** Renames an item's merged display name (what every source collapses into) — not a per-source edit. */
   updateGroceryItemText: (id: string, newText: string) => void;
+  /** Drag-and-drop reorder/move: writes a new section + position for every item passed, in one batch. */
+  reorderGroceryItems: (updates: { id: string; section: string; order: number }[]) => Promise<void>;
 
   inviteCollaborator: (email: string) => Promise<void>;
   pendingInvite: GroceryInvite | undefined;
@@ -256,6 +259,7 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
               sources: Array.isArray(data.sources) ? data.sources : [],
               addedBy: data.addedBy,
               sectionOverride: data.sectionOverride ?? undefined,
+              order: typeof data.order === 'number' ? data.order : undefined,
             };
           })
         );
@@ -464,6 +468,17 @@ export function GroceryProvider({ children }: { children: ReactNode }) {
         const trimmed = displayIngredientName(newText);
         if (!trimmed) return;
         updateDoc(doc(db, 'groceryLists', activeListId, 'items', id), { text: trimmed });
+      },
+      reorderGroceryItems: async (updates) => {
+        if (!activeListId || updates.length === 0) return;
+        const batch = writeBatch(db);
+        updates.forEach(({ id, section, order }) => {
+          batch.update(doc(db, 'groceryLists', activeListId, 'items', id), {
+            sectionOverride: section,
+            order,
+          });
+        });
+        await batch.commit();
       },
 
       groceryItems,

@@ -19,6 +19,8 @@ export type GroceryItem = {
    * `categorizeIngredient()` guess. Absent means "use the automatic guess."
    */
   sectionOverride?: string;
+  /** Manual sort position within its section, set by dragging — absent items sort after ordered ones. */
+  order?: number;
 };
 
 /**
